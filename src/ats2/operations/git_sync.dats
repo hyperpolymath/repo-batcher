@@ -12,6 +12,7 @@ staload "libats/libc/SATS/stdlib.sats"
 staload "libats/libc/SATS/stdio.sats"
 
 staload "./types.dats"
+staload "../utils/string_utils.sats"
 
 (* ========== Git Command Execution ========== *)
 
@@ -378,14 +379,6 @@ and test_file_exists(path: string): bool = let
 in
   exit_code = 0
 end
-
-and string_substring(s: string, start: int, len: int): string =
-  // TODO: Implement proper substring extraction
-  s  // Placeholder
-
-and tostring_int(n: int): string =
-  // TODO: Implement int to string conversion
-  "0"  // Placeholder
 
 and list_length(lst: List0('a)): int =
   case+ lst of

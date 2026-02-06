@@ -13,6 +13,7 @@ staload "libats/libc/SATS/dirent.sats"
 
 staload "./types.dats"
 staload "../validation/spdx.dats"
+staload "../utils/string_utils.sats"
 
 (* ========== File Operations ========== *)
 
@@ -387,44 +388,3 @@ in
   else
     ""
 end
-
-(*
-** Checks if string contains substring
-*)
-and string_contains(haystack: string, needle: string): bool =
-  string_index_of(haystack, needle) >= 0
-
-(*
-** Replaces all occurrences of old with new in string
-*)
-and string_replace(str: string, old: string, new: string): string =
-  // TODO: Implement proper string replacement
-  str  // Placeholder
-
-(*
-** Trims whitespace from string
-*)
-and string_trim(s: string): string =
-  // TODO: Implement proper trimming
-  s  // Placeholder
-
-(*
-** Gets index of substring, or -1 if not found
-*)
-and string_index_of(haystack: string, needle: string): int =
-  // TODO: Implement substring search
-  ~1  // Placeholder
-
-(*
-** Gets last index of character, or -1 if not found
-*)
-and string_rindex_of(haystack: string, needle: char): int =
-  // TODO: Implement reverse character search
-  ~1  // Placeholder
-
-(*
-** Gets suffix of string starting at position
-*)
-and string_suffix(s: string, start: int): string =
-  // TODO: Implement string suffix extraction
-  ""  // Placeholder

@@ -8,6 +8,8 @@ module main
 import os
 import cli
 import ffi
+import executor
+import utils
 
 const (
 	version = '0.1.0'
@@ -255,25 +257,27 @@ fn cmd_license_update(cmd cli.Command) ! {
 		println('')
 	}
 
-	// Resolve target directory
-	base_dir := if targets.starts_with('@') {
-		default_repos_dir
-	} else {
-		targets
+	// Resolve repositories from target specification
+	println('Resolving target repositories...')
+	repos := utils.resolve_targets(targets, default_repos_dir, 2)
+	println('Found ${repos.len} repositories')
+	println('')
+
+	if repos.len == 0 {
+		println('No repositories found matching: ${targets}')
+		return
 	}
 
-	// Call ATS2 formally verified implementation
-	println('Executing formally verified license update...')
-	params := ffi.LicenseUpdateParams{
-		old_license: old
-		new_license: new
-		base_dir: base_dir
-		max_depth: 2
-		dry_run: dry_run
-		backup: backup
-	}
+	// Determine parallel jobs (use 4 for license updates, less I/O intensive)
+	parallel := if repos.len < 4 { repos.len } else { 4 }
 
-	result := ffi.license_update(params)
+	// Create parallel executor with V coroutines
+	mut pool := executor.new_worker_pool(repos, parallel)
+
+	// Execute license-update in parallel
+	result := pool.execute_license_update(old, new, backup, dry_run)
+
+	// Print results
 	result.print()
 
 	if result.has_failures() {
@@ -307,25 +311,27 @@ fn cmd_file_replace(cmd cli.Command) ! {
 		println('')
 	}
 
-	// Resolve target directory
-	base_dir := if targets.starts_with('@') {
-		default_repos_dir
-	} else {
-		targets
+	// Resolve repositories from target specification
+	println('Resolving target repositories...')
+	repos := utils.resolve_targets(targets, default_repos_dir, 2)
+	println('Found ${repos.len} repositories')
+	println('')
+
+	if repos.len == 0 {
+		println('No repositories found matching: ${targets}')
+		return
 	}
 
-	// Call ATS2 formally verified implementation
-	println('Executing formally verified file replace...')
-	params := ffi.FileReplaceParams{
-		pattern: pattern
-		replacement: replacement
-		base_dir: base_dir
-		max_depth: 2
-		dry_run: dry_run
-		backup: backup
-	}
+	// Determine parallel jobs
+	parallel := if repos.len < 4 { repos.len } else { 4 }
 
-	result := ffi.file_replace(params)
+	// Create parallel executor with V coroutines
+	mut pool := executor.new_worker_pool(repos, parallel)
+
+	// Execute file-replace in parallel
+	result := pool.execute_file_replace(pattern, replacement, backup, dry_run)
+
+	// Print results
 	result.print()
 
 	if result.has_failures() {
@@ -351,20 +357,24 @@ fn cmd_git_sync(cmd cli.Command) ! {
 		println('')
 	}
 
-	// Call ATS2 formally verified implementation
-	println('Executing formally verified git-sync...')
+	// Find all repositories
 	println('Scanning for repositories (find . -maxdepth ${depth} -name ".git")...')
+	repos := utils.find_git_repos(default_repos_dir, depth)
+	println('Found ${repos.len} repositories')
 	println('')
 
-	params := ffi.GitSyncParams{
-		base_dir: default_repos_dir
-		max_depth: depth
-		commit_msg: message
-		parallel_jobs: parallel
-		dry_run: dry_run
+	if repos.len == 0 {
+		println('No repositories found in ${default_repos_dir}')
+		return
 	}
 
-	result := ffi.git_sync(params)
+	// Create parallel executor with V coroutines
+	mut pool := executor.new_worker_pool(repos, parallel)
+
+	// Execute git-sync in parallel
+	result := pool.execute_git_sync(message, dry_run)
+
+	// Print results
 	result.print()
 
 	if result.has_failures() {
