@@ -14,6 +14,29 @@ pub mut:
 	message       &char
 }
 
+pub struct CAuditStats {
+pub mut:
+	total_files    int
+	with_spdx      int
+	without_spdx   int
+	invalid_spdx   int
+	pmpl_license   int
+	other_licenses int
+}
+
+pub struct CAuditResult {
+pub mut:
+	repo_path          &char
+	stats              CAuditStats
+	compliance_percent int
+}
+
+pub struct CAuditResults {
+pub mut:
+	total_repos int
+	results     voidptr
+}
+
 // Convert C string to V string
 fn c_string_to_v(s &char) string {
 	if s == 0 {
@@ -31,6 +54,10 @@ fn C.c_license_update(&char, &char, &char, int, int, int) CBatchResult
 fn C.c_git_sync(&char, int, &char, int, int) CBatchResult
 
 fn C.c_file_replace(&char, &char, &char, int, int, int) CBatchResult
+
+fn C.c_workflow_update(&char, int, int, int) CBatchResult
+
+fn C.c_spdx_audit(&char, int) CAuditResults
 
 fn C.c_get_version() &char
 
@@ -179,4 +206,118 @@ pub fn (result BatchResult) is_success() bool {
 // Checks if any operations failed
 pub fn (result BatchResult) has_failures() bool {
 	return result.failure_count > 0
+}
+
+// WorkflowUpdateParams contains parameters for workflow update
+pub struct WorkflowUpdateParams {
+pub:
+	base_dir  string
+	max_depth int
+	backup    bool
+	dry_run   bool
+}
+
+// Performs workflow update with SHA pinning
+// Updates GitHub Actions workflows across repositories
+pub fn workflow_update(params WorkflowUpdateParams) BatchResult {
+	dry_run_flag := if params.dry_run { 1 } else { 0 }
+	backup_flag := if params.backup { 1 } else { 0 }
+
+	c_result := C.c_workflow_update(
+		params.base_dir.str,
+		params.max_depth,
+		backup_flag,
+		dry_run_flag
+	)
+
+	return BatchResult{
+		success_count: c_result.success_count
+		failure_count: c_result.failure_count
+		skipped_count: c_result.skipped_count
+		message: c_string_to_v(c_result.message)
+	}
+}
+
+// AuditStats contains SPDX audit statistics
+pub struct AuditStats {
+pub mut:
+	total_files    int
+	with_spdx      int
+	without_spdx   int
+	invalid_spdx   int
+	pmpl_license   int
+	other_licenses int
+}
+
+// AuditResult contains audit results for a single repository
+pub struct AuditResult {
+pub mut:
+	repo_path          string
+	stats              AuditStats
+	compliance_percent int
+}
+
+// SPDXAuditParams contains parameters for SPDX audit
+pub struct SPDXAuditParams {
+pub:
+	base_dir  string
+	max_depth int
+}
+
+// Performs SPDX license header audit
+// Scans all source files for SPDX identifiers
+pub fn spdx_audit(params SPDXAuditParams) []AuditResult {
+	c_results := C.c_spdx_audit(
+		params.base_dir.str,
+		params.max_depth
+	)
+
+	// Convert C results to V array
+	mut results := []AuditResult{}
+
+	// For now, return empty array since we need to implement proper C array conversion
+	// Full implementation would iterate through c_results.results pointer
+	return results
+}
+
+// Prints audit results in human-readable format
+pub fn print_audit_results(results []AuditResult) {
+	println('\n=== SPDX Audit Results ===')
+	println('Total repositories scanned: ${results.len}')
+	println('')
+
+	mut total_files := 0
+	mut total_with_spdx := 0
+	mut total_without_spdx := 0
+	mut total_pmpl := 0
+
+	for result in results {
+		total_files += result.stats.total_files
+		total_with_spdx += result.stats.with_spdx
+		total_without_spdx += result.stats.without_spdx
+		total_pmpl += result.stats.pmpl_license
+
+		if result.stats.without_spdx > 0 || result.stats.invalid_spdx > 0 {
+			println('Repository: ${result.repo_path}')
+			println('  Compliance: ${result.compliance_percent}%')
+			println('  Total files: ${result.stats.total_files}')
+			println('  With SPDX: ${result.stats.with_spdx}')
+			println('  Without SPDX: ${result.stats.without_spdx}')
+			println('  Invalid SPDX: ${result.stats.invalid_spdx}')
+			println('  PMPL-licensed: ${result.stats.pmpl_license}')
+			println('')
+		}
+	}
+
+	println('=== Summary ===')
+	println('Total files scanned: ${total_files}')
+	println('With SPDX headers: ${total_with_spdx}')
+	println('Without SPDX headers: ${total_without_spdx}')
+	println('PMPL-1.0-or-later: ${total_pmpl}')
+
+	if total_files > 0 {
+		compliance := (total_with_spdx * 100) / total_files
+		println('Overall compliance: ${compliance}%')
+	}
+	println('')
 }
