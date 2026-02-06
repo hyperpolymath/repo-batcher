@@ -20,6 +20,11 @@ build-dev:
     v -o build/repo-batcher src/v/main.v
     @echo "Build complete: build/repo-batcher"
 
+# Run smoke test (structure validation, no build required)
+test-smoke:
+    @echo "Running smoke test..."
+    ./tests/smoke_test.sh
+
 # Run tests
 test:
     @echo "Running tests..."
