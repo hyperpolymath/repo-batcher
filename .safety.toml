@@ -1,0 +1,117 @@
+# SPDX-License-Identifier: PMPL-1.0-or-later
+# Safety Configuration for repo-batcher
+# Controls safety checks and guardrails for bulk operations
+
+[safety]
+# Safety level: paranoid, strict, relaxed, disabled
+# - paranoid: Maximum safety, confirm everything
+# - strict: Standard safety checks (recommended)
+# - relaxed: Minimal safety checks
+# - disabled: No safety checks (⚠️ DANGEROUS!)
+level = "strict"
+
+# Require dry-run before actual execution
+require_dry_run = true
+
+# Maximum repositories per operation
+max_repos = 100
+
+# Require confirmation if targeting more than N repos
+confirm_threshold = 10
+
+# Rate limit between operations (milliseconds)
+# Prevents hammering GitHub API
+rate_limit_ms = 100
+
+# Create backup before making changes
+backup_before = true
+
+# Enable audit logging
+audit_log = true
+
+# Audit log location
+audit_log_file = "~/.local/share/repo-batcher/audit.log"
+
+[exclusions]
+# Never operate on these paths/patterns
+# Add sensitive repositories or paths here
+patterns = [
+    ".git",
+    "node_modules",
+    "vendor",
+    ".env",
+    ".secrets",
+    "*.pem",
+    "*.key",
+]
+
+# Specific repositories to exclude (by name)
+repositories = [
+    # Add production/critical repos here
+    # Example: "prod-api",
+    # Example: "customer-data",
+]
+
+[validation]
+# Enable pre-flight validation checks
+enabled = true
+
+# Validation rules to run
+# Available: git_repository_check, write_permission_check,
+#           uncommitted_changes_check, remote_exists_check,
+#           disk_space_check
+rules = [
+    "git_repository_check",
+    "write_permission_check",
+    "uncommitted_changes_check",
+    "remote_exists_check",
+    "disk_space_check",
+]
+
+[confirmations]
+# Operations that always require confirmation
+always_confirm = [
+    "destructive",
+    "remote_changes",
+]
+
+# Automatic approval for these operations (dry-run only)
+auto_approve_dry_run = true
+
+# Show diff preview before applying changes
+show_diff_preview = true
+
+[limits]
+# Maximum files to modify in single operation
+max_files_per_operation = 10000
+
+# Maximum parallel workers
+max_parallel_workers = 8
+
+# Operation timeout (seconds)
+# 0 = no timeout
+operation_timeout = 3600
+
+[recovery]
+# Enable automatic checkpoint/resume
+enable_checkpoints = true
+
+# Checkpoint frequency (number of repos)
+checkpoint_every = 10
+
+# Keep checkpoints for N days
+checkpoint_retention_days = 7
+
+# Checkpoint directory
+checkpoint_dir = "~/.local/share/repo-batcher/checkpoints"
+
+[notifications]
+# Notify on operation completion
+notify_on_complete = false
+
+# Notify on errors
+notify_on_error = true
+
+# Notification command (empty = no notifications)
+# Example: "notify-send 'repo-batcher' '$MESSAGE'"
+notification_command = ""
