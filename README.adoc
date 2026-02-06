@@ -65,6 +65,30 @@ repo-batcher git-sync \
   --commit-message "chore: general update"
 ----
 
+=== Template Merge
+
+Convert existing repos to template form while preserving content:
+
+[source,bash]
+----
+repo-batcher template-merge \
+  --targets "@all-repos" \
+  --workflows \
+  --scm-files \
+  --bot-directives \
+  --contractiles \
+  --preserve \
+  --dry-run
+----
+
+Adds:
+* 5 GitHub workflows (hypatia-scan, codeql, scorecard, quality, mirror)
+* 6 SCM files (META, ECOSYSTEM, STATE, CHECKLIST, ROADMAP, CHANGELOG)
+* 6 bot directives (rhodibot, echidnabot, sustainabot, glambot, seambot, finishbot)
+* Contractiles directory with README
+* justfile with default recipes
+* .editorconfig with standard settings
+
 === Watch Folder Mode
 
 Drop an operation file for automatic execution:
@@ -190,6 +214,30 @@ cat ~/.local/share/repo-batcher/logs/latest.log
 | `workflow-update`
 | Update GitHub Actions workflows
 | Valid YAML, SHA pinning, CodeQL matrix validation
+
+| `wiki-setup`
+| Initialize wikis with first page
+| Creates Home.md to enable automation
+
+| `community-setup`
+| Deploy community health files
+| CODE_OF_CONDUCT, CONTRIBUTING, SECURITY, etc.
+
+| `templates-setup`
+| Deploy issue and PR templates
+| Bug report, feature request, documentation templates
+
+| `discussions-setup`
+| Enable and configure GitHub Discussions
+| Creates 5 default categories (read-only operation)
+
+| `pages-setup`
+| Enable and configure GitHub Pages
+| Configure source, branch, custom domains (remote)
+
+| `template-merge`
+| Convert repos to template form (preserves content)
+| Adds workflows, SCM files, bot directives, contractiles
 
 | `custom`
 | Execute custom operation from template
