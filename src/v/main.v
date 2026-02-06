@@ -210,6 +210,58 @@ fn main() {
 				]
 			},
 			cli.Command{
+				name: 'wiki-setup'
+				description: 'Initialize wikis with first page (enables automation)'
+				execute: cmd_wiki_setup
+				flags: [
+					cli.Flag{
+						flag: .string
+						name: 'targets'
+						abbrev: 't'
+						description: 'Target repositories (comma-separated or @pattern)'
+						required: true
+					},
+					cli.Flag{
+						flag: .string
+						name: 'home-template'
+						abbrev: 'h'
+						description: 'Path to Home.md template file'
+					},
+					cli.Flag{
+						flag: .bool
+						name: 'dry-run'
+						abbrev: 'd'
+						description: 'Preview changes without executing'
+					},
+				]
+			},
+			cli.Command{
+				name: 'community-setup'
+				description: 'Deploy community health files (CODE_OF_CONDUCT, CONTRIBUTING, etc.)'
+				execute: cmd_community_setup
+				flags: [
+					cli.Flag{
+						flag: .string
+						name: 'targets'
+						abbrev: 't'
+						description: 'Target repositories (comma-separated or @pattern)'
+						required: true
+					},
+					cli.Flag{
+						flag: .string
+						name: 'template-dir'
+						abbrev: 'T'
+						description: 'Directory with custom template files'
+					},
+					cli.Flag{
+						flag: .bool
+						name: 'dry-run'
+						abbrev: 'd'
+						description: 'Preview changes without executing'
+					},
+				]
+			},
+			cli.Command{
 				name: 'rollback'
 				description: 'Rollback last operation or specific log'
 				execute: cmd_rollback
@@ -248,6 +300,8 @@ fn show_help(cmd cli.Command) ! {
 	println('  file-replace      Replace files across repositories')
 	println('  git-sync          Batch git sync (add, commit, push)')
 	println('  github-settings   Bulk repository configuration (features, merge settings)')
+	println('  wiki-setup        Initialize wikis with first page (enables automation)')
+	println('  community-setup   Deploy community health files')
 	println('  watch             Start watch daemon')
 	println('  rollback          Rollback operation')
 	println('')
@@ -271,6 +325,12 @@ fn cmd_list_operations(cmd cli.Command) ! {
 	println('')
 	println('  github-settings   Bulk repository configuration via GitHub API')
 	println('                    Safety: Pre-flight validation, rollback support')
+	println('')
+	println('  wiki-setup        Initialize wikis with first page')
+	println('                    Safety: Creates Home.md to enable automation')
+	println('')
+	println('  community-setup   Deploy community health files')
+	println('                    Safety: CODE_OF_CONDUCT, CONTRIBUTING, SECURITY, etc.')
 	println('')
 	println('  custom            Execute custom operation from template')
 	println('                    Safety: Template validation, dry-run enforced')
@@ -621,5 +681,195 @@ fn cmd_github_settings(cmd cli.Command) ! {
 
 	if failed > 0 {
 		return error('GitHub settings update completed with failures')
+	}
+}
+
+fn cmd_wiki_setup(cmd cli.Command) ! {
+	targets := cmd.flags.get_string('targets')!
+	home_template := cmd.flags.get_string('home-template') or { '' }
+	dry_run := cmd.flags.get_bool('dry-run') or { false }
+
+	println('Wiki Setup Operation')
+	println('  Targets: ${targets}')
+	println('  Home template: ${if home_template != '' { home_template } else { '(default)' }}')
+	println('  Dry Run: ${dry_run}')
+	println('')
+
+	// Check gh CLI authentication
+	if !github.check_gh_cli_installed()! {
+		println('ERROR: GitHub CLI (gh) is not installed')
+		println('Please install it: https://cli.github.com/')
+		return error('gh CLI not available')
+	}
+
+	if !github.check_gh_auth()! {
+		println('ERROR: Not authenticated with GitHub CLI')
+		println('Please run: gh auth login')
+		return error('gh auth required')
+	}
+
+	// Load home content from template or use default
+	mut home_content := ''
+	if home_template != '' {
+		home_content = os.read_file(home_template) or {
+			println('ERROR: Failed to read home template: ${err}')
+			return error('Template read failed')
+		}
+	}
+
+	if dry_run {
+		println('[DRY RUN] No changes will be made')
+		println('')
+	}
+
+	// Resolve repositories
+	println('Resolving target repositories...')
+	repos := utils.resolve_targets(targets, default_repos_dir, 2)
+	println('Found ${repos.len} repositories')
+	println('')
+
+	if repos.len == 0 {
+		println('No repositories found matching: ${targets}')
+		return
+	}
+
+	// Convert to owner/repo format
+	mut repo_names := []string{}
+	for repo_path in repos {
+		parts := repo_path.split(os.path_separator)
+		if parts.len > 0 {
+			repo_name := parts[parts.len - 1]
+			repo_names << 'hyperpolymath/${repo_name}'
+
+			// Use default content if no template provided
+			if home_content == '' {
+				home_content = github.default_home_content(repo_name)
+			}
+		}
+	}
+
+	println('Initializing wikis for ${repo_names.len} repositories...')
+	println('')
+
+	// Execute wiki setup
+	start_time := time.now()
+	results := github.setup_wikis_batch(repo_names, home_content, dry_run)
+	duration := time.since(start_time)
+
+	// Print summary
+	github.print_wiki_summary(results)
+	println('Completed in ${duration.seconds():.2f}s')
+
+	// Check for failures
+	mut failed := 0
+	for result in results {
+		if !result.success {
+			failed++
+		}
+	}
+
+	if failed > 0 {
+		return error('Wiki setup completed with failures')
+	}
+}
+
+fn cmd_community_setup(cmd cli.Command) ! {
+	targets := cmd.flags.get_string('targets')!
+	template_dir := cmd.flags.get_string('template-dir') or { '' }
+	dry_run := cmd.flags.get_bool('dry-run') or { false }
+
+	println('Community Health Files Setup')
+	println('  Targets: ${targets}')
+	println('  Templates: ${if template_dir != '' { template_dir } else { '(default)' }}')
+	println('  Dry Run: ${dry_run}')
+	println('')
+
+	// Get community files (default or from template directory)
+	mut files := []github.CommunityFile{}
+	if template_dir != '' {
+		// Load custom templates
+		println('Loading custom templates from ${template_dir}...')
+
+		// Define expected files
+		template_files := [
+			'CODE_OF_CONDUCT.md',
+			'CONTRIBUTING.md',
+			'SECURITY.md',
+			'SUPPORT.md',
+			'FUNDING.yml',
+		]
+
+		for template_file in template_files {
+			file_path := os.join_path(template_dir, template_file)
+			if os.exists(file_path) {
+				content := os.read_file(file_path) or {
+					println('WARNING: Failed to read ${template_file}: ${err}')
+					continue
+				}
+
+				target_path := if template_file.ends_with('.yml') {
+					'.github/${template_file}'
+				} else {
+					'.github/${template_file}'
+				}
+
+				files << github.CommunityFile{
+					path: target_path
+					content: content
+					name: template_file
+				}
+			}
+		}
+
+		if files.len == 0 {
+			println('ERROR: No template files found in ${template_dir}')
+			return error('No templates found')
+		}
+		println('Loaded ${files.len} custom templates')
+	} else {
+		// Use default templates
+		files = github.standard_community_files()
+		println('Using default community file templates (${files.len} files)')
+	}
+	println('')
+
+	if dry_run {
+		println('[DRY RUN] No changes will be made')
+		println('')
+	}
+
+	// Resolve repositories
+	println('Resolving target repositories...')
+	repos := utils.resolve_targets(targets, default_repos_dir, 2)
+	println('Found ${repos.len} repositories')
+	println('')
+
+	if repos.len == 0 {
+		println('No repositories found matching: ${targets}')
+		return
+	}
+
+	println('Deploying community files to ${repos.len} repositories...')
+	println('')
+
+	// Execute community setup
+	start_time := time.now()
+	results := github.setup_community_batch(repos, files, dry_run)
+	duration := time.since(start_time)
+
+	// Print summary
+	github.print_community_summary(results)
+	println('Completed in ${duration.seconds():.2f}s')
+
+	// Check for failures
+	mut failed := 0
+	for result in results {
+		if !result.success {
+			failed++
+		}
+	}
+
+	if failed > 0 {
+		return error('Community setup completed with failures')
 	}
 }
