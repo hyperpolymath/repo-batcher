@@ -16,6 +16,7 @@ import watcher
 import github
 import parsers
 import safety
+import templates
 
 const (
 	version = '0.1.0'
@@ -396,6 +397,57 @@ fn main() {
 				]
 			},
 			cli.Command{
+				name: 'template-merge'
+				description: 'Convert existing repos to template form (preserves content)'
+				execute: cmd_template_merge
+				flags: [
+					cli.Flag{
+						flag: .string
+						name: 'targets'
+						abbrev: 't'
+						description: 'Target repositories (comma-separated or @pattern)'
+						required: true
+					},
+					cli.Flag{
+						flag: .bool
+						name: 'workflows'
+						description: 'Add GitHub workflows (default: true)'
+					},
+					cli.Flag{
+						flag: .bool
+						name: 'scm-files'
+						description: 'Add .machine_readable SCM files (default: true)'
+					},
+					cli.Flag{
+						flag: .bool
+						name: 'bot-directives'
+						description: 'Add .bot_directives (default: true)'
+					},
+					cli.Flag{
+						flag: .bool
+						name: 'contractiles'
+						description: 'Add contractiles directory (default: true)'
+					},
+					cli.Flag{
+						flag: .bool
+						name: 'preserve'
+						description: 'Preserve existing files (default: true)'
+					},
+					cli.Flag{
+						flag: .bool
+						name: 'dry-run'
+						abbrev: 'd'
+						description: 'Preview changes without executing'
+					},
+					cli.Flag{
+						flag: .bool
+						name: 'force'
+						abbrev: 'f'
+						description: 'Skip safety confirmation prompts'
+					},
+				]
+			},
+			cli.Command{
 				name: 'rollback'
 				description: 'Rollback last operation or specific log'
 				execute: cmd_rollback
@@ -439,6 +491,7 @@ fn show_help(cmd cli.Command) ! {
 	println('  templates-setup   Deploy issue and PR templates')
 	println('  discussions-setup Enable and configure GitHub Discussions')
 	println('  pages-setup       Enable and configure GitHub Pages')
+	println('  template-merge    Convert repos to template form (preserves content)')
 	println('  watch             Start watch daemon')
 	println('  rollback          Rollback operation')
 	println('')
@@ -468,6 +521,18 @@ fn cmd_list_operations(cmd cli.Command) ! {
 	println('')
 	println('  community-setup   Deploy community health files')
 	println('                    Safety: CODE_OF_CONDUCT, CONTRIBUTING, SECURITY, etc.')
+	println('')
+	println('  templates-setup   Deploy issue and PR templates')
+	println('                    Safety: Bug report, feature request, documentation templates')
+	println('')
+	println('  discussions-setup Enable and configure GitHub Discussions')
+	println('                    Safety: Creates 5 default categories (read-only operation)')
+	println('')
+	println('  pages-setup       Enable and configure GitHub Pages')
+	println('                    Safety: Configure source, branch, custom domains (remote)')
+	println('')
+	println('  template-merge    Convert repos to template form (preserves content)')
+	println('                    Safety: Adds workflows, SCM, bot directives, contractiles')
 	println('')
 	println('  custom            Execute custom operation from template')
 	println('                    Safety: Template validation, dry-run enforced')
@@ -1798,5 +1863,165 @@ fn cmd_pages_setup(cmd cli.Command) ! {
 
 	if failed > 0 {
 		return error('Pages setup completed with failures')
+	}
+}
+
+fn cmd_template_merge(cmd cli.Command) ! {
+	targets := cmd.flags.get_string('targets')!
+	workflows := cmd.flags.get_bool('workflows') or { true }
+	scm_files := cmd.flags.get_bool('scm-files') or { true }
+	bot_directives := cmd.flags.get_bool('bot-directives') or { true }
+	contractiles := cmd.flags.get_bool('contractiles') or { true }
+	preserve := cmd.flags.get_bool('preserve') or { true }
+	dry_run := cmd.flags.get_bool('dry-run') or { false }
+	force := cmd.flags.get_bool('force') or { false }
+
+	println('Template Merge Operation')
+	println('  Targets: ${targets}')
+	println('  Add workflows: ${workflows}')
+	println('  Add SCM files: ${scm_files}')
+	println('  Add bot directives: ${bot_directives}')
+	println('  Add contractiles: ${contractiles}')
+	println('  Preserve existing: ${preserve}')
+	println('  Dry Run: ${dry_run}')
+	println('')
+
+	// Initialize safety system
+	mut safety_ctx := safety.new_safety_context() or {
+		println('⚠️  Failed to initialize safety system: ${err}')
+		println('⚠️  Proceeding with default strict safety')
+		safety.SafetyContext{
+			config: safety.default_safety_config()
+			rate_limiter: safety.new_rate_limiter(100)
+			audit_log: safety.AuditLog{ log_file: '' }
+			enabled: true
+		}
+	}
+	safety_ctx.print_banner()
+
+	if dry_run {
+		println('[DRY RUN] No changes will be made')
+		println('')
+	}
+
+	// Resolve repositories
+	println('Resolving target repositories...')
+	repos := utils.resolve_targets(targets, default_repos_dir, 2)
+	println('Found ${repos.len} repositories')
+	println('')
+
+	if repos.len == 0 {
+		println('No repositories found matching: ${targets}')
+		return
+	}
+
+	// Pre-flight validation
+	validation_result := safety_ctx.validate(repos, 'template-merge', dry_run) or {
+		println('⚠️  Validation failed: ${err}')
+		return error('Validation error')
+	}
+
+	safety.print_validation_result(validation_result)
+
+	if !validation_result.passed {
+		return error('Pre-flight validation failed')
+	}
+
+	// Safety check - should we proceed?
+	if !safety_ctx.should_proceed(
+		safety.OperationType.local_changes,
+		repos,
+		'Convert to template form (preserve existing content)',
+		dry_run,
+		force
+	)! {
+		println('Operation cancelled by user or safety system')
+		safety_ctx.audit(safety.OperationType.local_changes, repos, 'template-merge', 'CANCELLED')
+		return
+	}
+
+	// Build template merge config
+	config := templates.TemplateMergeConfig{
+		add_github_workflows: workflows
+		add_scm_files: scm_files
+		add_bot_directives: bot_directives
+		add_contractiles: contractiles
+		add_justfile: true
+		add_editorconfig: true
+		preserve_existing: preserve
+		template_source: 'rsr-template-repo'
+	}
+
+	println('Applying template merge to ${repos.len} repositories...')
+	println('')
+
+	// Execute template merge with rate limiting
+	start_time := time.now()
+	mut results := []templates.TemplateMergeResult{}
+
+	for i, repo_path in repos {
+		if i > 0 {
+			safety_ctx.rate_limit()
+		}
+
+		result := templates.apply_template_merge(repo_path, config, dry_run) or {
+			results << templates.TemplateMergeResult{
+				repo_path: repo_path
+				success: false
+				files_added: 0
+				files_preserved: 0
+				files_updated: 0
+				message: 'Error: ${err}'
+			}
+			continue
+		}
+
+		results << result
+
+		// Progress indicator
+		if i % 10 == 0 && i > 0 {
+			println('  Progress: ${i}/${repos.len}')
+		}
+	}
+
+	duration := time.since(start_time)
+
+	// Print summary
+	println('')
+	println('Template Merge Summary')
+	println('=====================')
+	mut successful := 0
+	mut failed := 0
+	mut total_added := 0
+	mut total_preserved := 0
+	mut total_updated := 0
+
+	for result in results {
+		if result.success {
+			successful++
+			total_added += result.files_added
+			total_preserved += result.files_preserved
+			total_updated += result.files_updated
+		} else {
+			failed++
+			println('  ✗ ${result.repo_path}: ${result.message}')
+		}
+	}
+
+	println('')
+	println('Results:')
+	println('  Successful: ${successful}')
+	println('  Failed: ${failed}')
+	println('  Files added: ${total_added}')
+	println('  Files preserved: ${total_preserved}')
+	println('  Files updated: ${total_updated}')
+	println('Completed in ${duration.seconds():.2f}s')
+
+	// Audit log
+	status := if failed > 0 { 'PARTIAL_FAILURE' } else { 'SUCCESS' }
+	safety_ctx.audit(safety.OperationType.local_changes, repos, 'template-merge', status)
+
+	if failed > 0 {
+		return error('Template merge completed with failures')
 	}
 }
