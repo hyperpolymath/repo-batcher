@@ -119,6 +119,12 @@ fn main() {
 						abbrev: 'b'
 						description: 'Create backups before changes'
 					},
+					cli.Flag{
+						flag: .bool
+						name: 'force'
+						abbrev: 'f'
+						description: 'Skip safety confirmation prompts'
+					},
 				]
 			},
 			cli.Command{
@@ -152,6 +158,12 @@ fn main() {
 						name: 'dry-run'
 						abbrev: 'd'
 						description: 'Preview changes without executing'
+					},
+					cli.Flag{
+						flag: .bool
+						name: 'force'
+						abbrev: 'f'
+						description: 'Skip safety confirmation prompts'
 					},
 				]
 			},
@@ -213,6 +225,12 @@ fn main() {
 						flag: .bool
 						name: 'delete-branch-on-merge'
 						description: 'Auto-delete branches after merge'
+					},
+					cli.Flag{
+						flag: .bool
+						name: 'force'
+						abbrev: 'f'
+						description: 'Skip safety confirmation prompts'
 					},
 				]
 			},
@@ -563,6 +581,7 @@ fn cmd_file_replace(cmd cli.Command) ! {
 	targets := cmd.flags.get_string('targets')!
 	dry_run := cmd.flags.get_bool('dry-run') or { false }
 	backup := cmd.flags.get_bool('backup') or { true }
+	force := cmd.flags.get_bool('force') or { false }
 
 	println('File Replace Operation')
 	println('  Pattern: ${pattern}')
@@ -571,6 +590,19 @@ fn cmd_file_replace(cmd cli.Command) ! {
 	println('  Dry Run: ${dry_run}')
 	println('  Backup: ${backup}')
 	println('')
+
+	// Initialize safety system
+	mut safety_ctx := safety.new_safety_context() or {
+		println('⚠️  Failed to initialize safety system: ${err}')
+		println('⚠️  Proceeding with default strict safety')
+		safety.SafetyContext{
+			config: safety.default_safety_config()
+			rate_limiter: safety.new_rate_limiter(100)
+			audit_log: safety.AuditLog{ log_file: '' }
+			enabled: true
+		}
+	}
+	safety_ctx.print_banner()
 
 	// Check replacement file exists
 	if !os.exists(replacement) {
@@ -594,6 +626,31 @@ fn cmd_file_replace(cmd cli.Command) ! {
 		return
 	}
 
+	// Pre-flight validation
+	validation_result := safety_ctx.validate(repos, 'file-replace', dry_run) or {
+		println('⚠️  Validation failed: ${err}')
+		return error('Validation error')
+	}
+
+	safety.print_validation_result(validation_result)
+
+	if !validation_result.passed {
+		return error('Pre-flight validation failed')
+	}
+
+	// Safety check - should we proceed?
+	if !safety_ctx.should_proceed(
+		safety.OperationType.local_changes,
+		repos,
+		'Replace files matching ${pattern}',
+		dry_run,
+		force
+	)! {
+		println('Operation cancelled by user or safety system')
+		safety_ctx.audit(safety.OperationType.local_changes, repos, 'file-replace', 'CANCELLED')
+		return
+	}
+
 	// Determine parallel jobs
 	parallel := if repos.len < 4 { repos.len } else { 4 }
 
@@ -606,6 +663,10 @@ fn cmd_file_replace(cmd cli.Command) ! {
 	// Print results
 	result.print()
 
+	// Audit log
+	status := if result.has_failures() { 'PARTIAL_FAILURE' } else { 'SUCCESS' }
+	safety_ctx.audit(safety.OperationType.local_changes, repos, 'file-replace', status)
+
 	if result.has_failures() {
 		return error('File replace completed with failures')
 	}
@@ -616,6 +677,7 @@ fn cmd_git_sync(cmd cli.Command) ! {
 	depth := cmd.flags.get_int('depth') or { 2 }
 	message := cmd.flags.get_string('commit-message') or { 'chore: batch update' }
 	dry_run := cmd.flags.get_bool('dry-run') or { false }
+	force := cmd.flags.get_bool('force') or { false }
 
 	println('Git Batch Sync Operation (ported from sync_repos.sh)')
 	println('  Parallel Jobs: ${parallel}')
@@ -623,6 +685,19 @@ fn cmd_git_sync(cmd cli.Command) ! {
 	println('  Commit Message: ${message}')
 	println('  Dry Run: ${dry_run}')
 	println('')
+
+	// Initialize safety system
+	mut safety_ctx := safety.new_safety_context() or {
+		println('⚠️  Failed to initialize safety system: ${err}')
+		println('⚠️  Proceeding with default strict safety')
+		safety.SafetyContext{
+			config: safety.default_safety_config()
+			rate_limiter: safety.new_rate_limiter(100)
+			audit_log: safety.AuditLog{ log_file: '' }
+			enabled: true
+		}
+	}
+	safety_ctx.print_banner()
 
 	if dry_run {
 		println('[DRY RUN] No changes will be made')
@@ -640,6 +715,31 @@ fn cmd_git_sync(cmd cli.Command) ! {
 		return
 	}
 
+	// Pre-flight validation
+	validation_result := safety_ctx.validate(repos, 'git-sync', dry_run) or {
+		println('⚠️  Validation failed: ${err}')
+		return error('Validation error')
+	}
+
+	safety.print_validation_result(validation_result)
+
+	if !validation_result.passed {
+		return error('Pre-flight validation failed')
+	}
+
+	// Safety check - should we proceed?
+	if !safety_ctx.should_proceed(
+		safety.OperationType.remote_changes,
+		repos,
+		'Batch commit and push: ${message}',
+		dry_run,
+		force
+	)! {
+		println('Operation cancelled by user or safety system')
+		safety_ctx.audit(safety.OperationType.remote_changes, repos, 'git-sync', 'CANCELLED')
+		return
+	}
+
 	// Create parallel executor with V coroutines
 	mut pool := executor.new_worker_pool(repos, parallel)
 
@@ -648,6 +748,10 @@ fn cmd_git_sync(cmd cli.Command) ! {
 
 	// Print results
 	result.print()
+
+	// Audit log
+	status := if result.has_failures() { 'PARTIAL_FAILURE' } else { 'SUCCESS' }
+	safety_ctx.audit(safety.OperationType.remote_changes, repos, 'git-sync', status)
 
 	if result.has_failures() {
 		println('NOTE: Some repositories failed. Check logs for details.')
@@ -723,6 +827,7 @@ fn cmd_github_settings(cmd cli.Command) ! {
 	config_file := cmd.flags.get_string('config') or { '' }
 	targets := cmd.flags.get_string('targets')!
 	dry_run := cmd.flags.get_bool('dry-run') or { false }
+	force := cmd.flags.get_bool('force') or { false }
 
 	// Individual flag overrides
 	has_issues := cmd.flags.get_bool('has-issues') or { none }
@@ -734,6 +839,19 @@ fn cmd_github_settings(cmd cli.Command) ! {
 	println('  Targets: ${targets}')
 	println('  Dry Run: ${dry_run}')
 	println('')
+
+	// Initialize safety system
+	mut safety_ctx := safety.new_safety_context() or {
+		println('⚠️  Failed to initialize safety system: ${err}')
+		println('⚠️  Proceeding with default strict safety')
+		safety.SafetyContext{
+			config: safety.default_safety_config()
+			rate_limiter: safety.new_rate_limiter(100)
+			audit_log: safety.AuditLog{ log_file: '' }
+			enabled: true
+		}
+	}
+	safety_ctx.print_banner()
 
 	// Check gh CLI authentication
 	if !github.check_gh_cli_installed()! {
@@ -801,6 +919,18 @@ fn cmd_github_settings(cmd cli.Command) ! {
 		return
 	}
 
+	// Pre-flight validation
+	validation_result := safety_ctx.validate(repos, 'github-settings', dry_run) or {
+		println('⚠️  Validation failed: ${err}')
+		return error('Validation error')
+	}
+
+	safety.print_validation_result(validation_result)
+
+	if !validation_result.passed {
+		return error('Pre-flight validation failed')
+	}
+
 	// Convert repo paths to owner/repo format (assumes repos in ~/Documents/hyperpolymath-repos/)
 	mut repo_names := []string{}
 	for repo_path in repos {
@@ -813,12 +943,47 @@ fn cmd_github_settings(cmd cli.Command) ! {
 		}
 	}
 
+	// Safety check - should we proceed?
+	if !safety_ctx.should_proceed(
+		safety.OperationType.remote_changes,
+		repo_names,
+		'Apply GitHub repository settings',
+		dry_run,
+		force
+	)! {
+		println('Operation cancelled by user or safety system')
+		safety_ctx.audit(safety.OperationType.remote_changes, repo_names, 'github-settings', 'CANCELLED')
+		return
+	}
+
 	println('Applying settings to ${repo_names.len} repositories...')
 	println('')
 
-	// Execute settings update
+	// Execute settings update with rate limiting
 	start_time := time.now()
-	results := github.apply_settings_batch(repo_names, settings, dry_run)
+	mut results := []github.SettingsResult{}
+
+	for i, repo_name in repo_names {
+		if i > 0 {
+			safety_ctx.rate_limit()
+		}
+
+		result := github.apply_settings(repo_name, settings, dry_run) or {
+			results << github.SettingsResult{
+				repo_path: repo_name
+				success: false
+				message: 'Error: ${err}'
+			}
+			continue
+		}
+
+		results << result
+
+		if i % 10 == 0 && i > 0 {
+			println('  Progress: ${i}/${repo_names.len}')
+		}
+	}
+
 	duration := time.since(start_time)
 
 	// Print results
@@ -840,6 +1005,10 @@ fn cmd_github_settings(cmd cli.Command) ! {
 	github.print_summary(summary)
 
 	println('Completed in ${duration.seconds():.2f}s')
+
+	// Audit log
+	status := if failed > 0 { 'PARTIAL_FAILURE' } else { 'SUCCESS' }
+	safety_ctx.audit(safety.OperationType.remote_changes, repo_names, 'github-settings', status)
 
 	if failed > 0 {
 		return error('GitHub settings update completed with failures')
