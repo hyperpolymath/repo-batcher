@@ -262,6 +262,85 @@ fn main() {
 				]
 			},
 			cli.Command{
+				name: 'templates-setup'
+				description: 'Deploy issue and PR templates'
+				execute: cmd_templates_setup
+				flags: [
+					cli.Flag{
+						flag: .string
+						name: 'targets'
+						abbrev: 't'
+						description: 'Target repositories (comma-separated or @pattern)'
+						required: true
+					},
+					cli.Flag{
+						flag: .string
+						name: 'template-dir'
+						abbrev: 'T'
+						description: 'Directory with custom template files'
+					},
+					cli.Flag{
+						flag: .bool
+						name: 'dry-run'
+						abbrev: 'd'
+						description: 'Preview changes without executing'
+					},
+				]
+			},
+			cli.Command{
+				name: 'discussions-setup'
+				description: 'Enable and configure GitHub Discussions'
+				execute: cmd_discussions_setup
+				flags: [
+					cli.Flag{
+						flag: .string
+						name: 'targets'
+						abbrev: 't'
+						description: 'Target repositories (comma-separated or @pattern)'
+						required: true
+					},
+					cli.Flag{
+						flag: .bool
+						name: 'dry-run'
+						abbrev: 'd'
+						description: 'Preview changes without executing'
+					},
+				]
+			},
+			cli.Command{
+				name: 'pages-setup'
+				description: 'Enable and configure GitHub Pages'
+				execute: cmd_pages_setup
+				flags: [
+					cli.Flag{
+						flag: .string
+						name: 'targets'
+						abbrev: 't'
+						description: 'Target repositories (comma-separated or @pattern)'
+						required: true
+					},
+					cli.Flag{
+						flag: .string
+						name: 'source'
+						abbrev: 's'
+						description: 'Pages source (root-main, docs-main, gh-pages) [default: docs-main]'
+						default_value: ['docs-main']
+					},
+					cli.Flag{
+						flag: .string
+						name: 'cname'
+						abbrev: 'c'
+						description: 'Custom domain for Pages'
+					},
+					cli.Flag{
+						flag: .bool
+						name: 'dry-run'
+						abbrev: 'd'
+						description: 'Preview changes without executing'
+					},
+				]
+			},
+			cli.Command{
 				name: 'rollback'
 				description: 'Rollback last operation or specific log'
 				execute: cmd_rollback
@@ -302,6 +381,9 @@ fn show_help(cmd cli.Command) ! {
 	println('  github-settings   Bulk repository configuration (features, merge settings)')
 	println('  wiki-setup        Initialize wikis with first page (enables automation)')
 	println('  community-setup   Deploy community health files')
+	println('  templates-setup   Deploy issue and PR templates')
+	println('  discussions-setup Enable and configure GitHub Discussions')
+	println('  pages-setup       Enable and configure GitHub Pages')
 	println('  watch             Start watch daemon')
 	println('  rollback          Rollback operation')
 	println('')
@@ -872,4 +954,242 @@ fn cmd_community_setup(cmd cli.Command) ! {
 	if failed > 0 {
 		return error('Community setup completed with failures')
 	}
+}
+
+fn cmd_templates_setup(cmd cli.Command) ! {
+	targets := cmd.flags.get_string('targets')!
+	template_dir := cmd.flags.get_string('template-dir') or { '' }
+	dry_run := cmd.flags.get_bool('dry-run') or { false }
+
+	println('Issue & PR Templates Setup')
+	println('  Targets: ${targets}')
+	println('  Templates: ${if template_dir != '' { template_dir } else { '(default)' }}')
+	println('  Dry Run: ${dry_run}')
+	println('')
+
+	// Get templates (default or custom)
+	mut issue_templates := []github.IssueTemplate{}
+	mut pr_template := ''
+
+	if template_dir != '' {
+		// Load custom templates
+		println('Loading custom templates from ${template_dir}...')
+
+		// Try to load issue templates
+		issue_template_dir := os.join_path(template_dir, 'ISSUE_TEMPLATE')
+		if os.exists(issue_template_dir) {
+			files := os.ls(issue_template_dir) or { []string{} }
+			for file in files {
+				if file.ends_with('.yml') || file.ends_with('.md') {
+					file_path := os.join_path(issue_template_dir, file)
+					content := os.read_file(file_path) or {
+						println('WARNING: Failed to read ${file}')
+						continue
+					}
+
+					issue_templates << github.IssueTemplate{
+						name: file.replace('.yml', '').replace('.md', '')
+						filename: file
+						content: content
+						description: file
+					}
+				}
+			}
+		}
+
+		// Try to load PR template
+		pr_template_path := os.join_path(template_dir, 'PULL_REQUEST_TEMPLATE.md')
+		if os.exists(pr_template_path) {
+			pr_template = os.read_file(pr_template_path) or { '' }
+		}
+
+		println('Loaded ${issue_templates.len} issue templates')
+	} else {
+		// Use default templates
+		issue_templates = github.standard_issue_templates()
+		pr_template = github.default_pr_template()
+		println('Using default templates (${issue_templates.len} issue + 1 PR)')
+	}
+	println('')
+
+	if dry_run {
+		println('[DRY RUN] No changes will be made')
+		println('')
+	}
+
+	// Resolve repositories
+	println('Resolving target repositories...')
+	repos := utils.resolve_targets(targets, default_repos_dir, 2)
+	println('Found ${repos.len} repositories')
+	println('')
+
+	if repos.len == 0 {
+		println('No repositories found matching: ${targets}')
+		return
+	}
+
+	println('Deploying templates to ${repos.len} repositories...')
+	println('')
+
+	// Execute templates setup
+	start_time := time.now()
+	results := github.setup_templates_batch(repos, issue_templates, pr_template, dry_run)
+	duration := time.since(start_time)
+
+	// Print summary
+	github.print_templates_summary(results)
+	println('Completed in ${duration.seconds():.2f}s')
+
+	// Check for failures
+	mut failed := 0
+	for result in results {
+		if !result.success {
+			failed++
+		}
+	}
+
+	if failed > 0 {
+		return error('Templates setup completed with failures')
+	}
+}
+
+fn cmd_discussions_setup(cmd cli.Command) ! {
+	targets := cmd.flags.get_string('targets')!
+	dry_run := cmd.flags.get_bool('dry-run') or { false }
+
+	println('GitHub Discussions Setup')
+	println('  Targets: ${targets}')
+	println('  Dry Run: ${dry_run}')
+	println('')
+
+	// Check gh CLI authentication
+	if !github.check_gh_cli_installed()! {
+		println('ERROR: GitHub CLI (gh) is not installed')
+		println('Please install it: https://cli.github.com/')
+		return error('gh CLI not available')
+	}
+
+	if !github.check_gh_auth()! {
+		println('ERROR: Not authenticated with GitHub CLI')
+		println('Please run: gh auth login')
+		return error('gh auth required')
+	}
+
+	if dry_run {
+		println('[DRY RUN] No changes will be made')
+		println('')
+	}
+
+	// Resolve repositories
+	println('Resolving target repositories...')
+	repos := utils.resolve_targets(targets, default_repos_dir, 2)
+	println('Found ${repos.len} repositories')
+	println('')
+
+	if repos.len == 0 {
+		println('No repositories found matching: ${targets}')
+		return
+	}
+
+	// Convert to owner/repo format
+	mut repo_names := []string{}
+	for repo_path in repos {
+		parts := repo_path.split(os.path_separator)
+		if parts.len > 0 {
+			repo_name := parts[parts.len - 1]
+			repo_names << 'hyperpolymath/${repo_name}'
+		}
+	}
+
+	println('Setting up discussions for ${repo_names.len} repositories...')
+	println('')
+
+	// Execute discussions setup
+	categories := github.default_discussion_categories()
+	start_time := time.now()
+	results := github.setup_discussions_batch(repo_names, categories, dry_run)
+	duration := time.since(start_time)
+
+	// Print summary
+	github.print_discussions_summary(results)
+	println('Completed in ${duration.seconds():.2f}s')
+
+	println('')
+	println('Note: Discussions must be manually enabled in GitHub repository settings')
+	println('due to API limitations. This command verifies their status.')
+}
+
+fn cmd_pages_setup(cmd cli.Command) ! {
+	targets := cmd.flags.get_string('targets')!
+	source_str := cmd.flags.get_string('source') or { 'docs-main' }
+	cname := cmd.flags.get_string('cname') or { '' }
+	dry_run := cmd.flags.get_bool('dry-run') or { false }
+
+	// Parse source parameter
+	source := match source_str {
+		'root-main' { github.PagesSource.root_main }
+		'docs-main' { github.PagesSource.docs_main }
+		'gh-pages' { github.PagesSource.root_gh_pages }
+		else { github.PagesSource.docs_main }
+	}
+
+	println('GitHub Pages Setup')
+	println('  Targets: ${targets}')
+	println('  Source: ${source_str}')
+	if cname != '' {
+		println('  Custom domain: ${cname}')
+	}
+	println('  Dry Run: ${dry_run}')
+	println('')
+
+	// Check gh CLI authentication
+	if !github.check_gh_cli_installed()! {
+		println('ERROR: GitHub CLI (gh) is not installed')
+		println('Please install it: https://cli.github.com/')
+		return error('gh CLI not available')
+	}
+
+	if !github.check_gh_auth()! {
+		println('ERROR: Not authenticated with GitHub CLI')
+		println('Please run: gh auth login')
+		return error('gh auth required')
+	}
+
+	if dry_run {
+		println('[DRY RUN] No changes will be made')
+		println('')
+	}
+
+	// Resolve repositories
+	println('Resolving target repositories...')
+	repos := utils.resolve_targets(targets, default_repos_dir, 2)
+	println('Found ${repos.len} repositories')
+	println('')
+
+	if repos.len == 0 {
+		println('No repositories found matching: ${targets}')
+		return
+	}
+
+	// Convert to owner/repo format
+	mut repo_names := []string{}
+	for repo_path in repos {
+		parts := repo_path.split(os.path_separator)
+		if parts.len > 0 {
+			repo_name := parts[parts.len - 1]
+			repo_names << 'hyperpolymath/${repo_name}'
+		}
+	}
+
+	println('Setting up Pages for ${repo_names.len} repositories...')
+	println('')
+
+	// Execute Pages setup
+	start_time := time.now()
+	results := github.setup_pages_batch(repo_names, source, cname, dry_run)
+	duration := time.since(start_time)
+
+	// Print summary
+	github.print_pages_summary(results)
+	println('Completed in ${duration.seconds():.2f}s')
 }
