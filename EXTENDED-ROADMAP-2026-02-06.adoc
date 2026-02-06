@@ -293,6 +293,238 @@ pub fn adaptive_worker_pool(repos []string) WorkerPool {
 }
 ----
 
+=== 2.4 GitHub Settings Operation
+
+**Purpose**: Bulk GitHub repository configuration management
+
+**Timeline**: 4 weeks
+**Priority**: HIGH (120x time savings)
+**Design**: link:docs/GITHUB-SETTINGS-OPERATION.adoc[Complete Design Document]
+
+==== Settings Categories
+
+**Repository Features**:
+- `has_issues`, `has_wiki`, `has_projects`, `has_downloads`
+
+**Merge Settings**:
+- `allow_squash_merge`, `allow_merge_commit`, `allow_rebase_merge`
+- `delete_branch_on_merge`, `allow_auto_merge`
+
+**Security Settings**:
+- `visibility` (public/private/internal)
+- `dependabot_alerts`, `dependabot_security_updates`
+- `secret_scanning`, `secret_scanning_push_protection`
+- `private_vulnerability_reporting`
+
+**Branch Protection**:
+- `required_pull_request_reviews` (number of approvers)
+- `dismiss_stale_reviews`, `require_code_owner_reviews`
+- `required_status_checks` (CI/CD checks)
+- `enforce_admins`, `require_signed_commits`
+- `require_linear_history`, `allow_force_pushes`
+
+**Topics/Labels**:
+- Add/remove repository topics (tags)
+- Manage issue labels
+
+==== Usage Examples
+
+[source,bash]
+----
+# Security hardening across all repos
+repo-batcher github-settings \
+  --targets "@all-repos" \
+  --set branch-protection=true \
+  --set secret-scanning=true \
+  --set require-signed-commits=true
+
+# Standardize MCP servers
+repo-batcher github-settings \
+  --targets "@pattern:poly-*-mcp" \
+  --config mcp-server-settings.toml \
+  --mode semi-auto
+
+# Make experimental repos private
+repo-batcher github-settings \
+  --targets "@topic:experimental" \
+  --set visibility=private \
+  --mode manual
+----
+
+==== Config File Format
+
+[source,toml]
+----
+# settings.toml - Repository configuration template
+
+[repository]
+has_issues = true
+has_wiki = false
+has_projects = true
+
+[merge]
+allow_squash_merge = true
+delete_branch_on_merge = true
+
+[security]
+visibility = "public"
+dependabot_alerts = true
+secret_scanning = true
+
+[branch_protection]
+branch = "main"
+required_reviews = 2
+required_status_checks = ["ci", "security-scan"]
+require_signed_commits = false
+
+[topics]
+add = ["mcp-server", "formally-verified"]
+remove = ["experimental"]
+----
+
+==== Implementation Phases
+
+**Week 1: Basic Settings** (50 lines ATS2 + 200 lines V)
+- Repository features (issues, wiki, projects)
+- Merge settings (squash, rebase, auto-delete)
+- TOML config parser
+- Dry-run support
+
+**Week 2: Security Settings** (100 lines ATS2 + 150 lines V)
+- Visibility management
+- Dependabot configuration
+- Secret scanning settings
+- Pre-flight validation
+
+**Week 3: Branch Protection** (150 lines ATS2 + 200 lines V)
+- Basic branch protection
+- Required reviews configuration
+- Required status checks
+- Signature requirements
+
+**Week 4: Advanced Features** (100 lines ATS2 + 150 lines V)
+- Topics/labels management
+- Rollback support
+- Idempotency checks
+- Integration tests
+
+==== Safety Features
+
+**Formal Verification** (ATS2):
+[source,ats]
+----
+(* Prove: public repos must have secret scanning *)
+extern
+praxi prove_public_requires_scanning:
+  {v: visibility}
+  (v == Public) -<prf> (secret_scanning == true)
+
+(* Prove: protected branches require valid checks *)
+datatype branch_protection(checks: list(string)) where length(checks) > 0
+----
+
+**Pre-flight Validation**:
+- Block dangerous setting combinations
+- Verify branches exist before protecting
+- Validate status checks exist
+- Check permissions before applying
+
+**Rollback Support**:
+- Backup current settings before changes
+- Automatic rollback on errors
+- Manual rollback by operation ID
+
+**Idempotency**:
+- Fetch current settings first
+- Compute diff
+- Only apply changed settings
+- Skip if already correct
+
+==== Time Savings
+
+[cols="2,2,2",options="header"]
+|===
+|Task |Manual (GitHub UI) |repo-batcher
+
+|Configure 565 repos
+|~10 hours
+|~5 minutes
+
+|Verify consistency
+|~3 hours
+|Automatic
+
+|Rollback changes
+|Manual undo
+|1 command
+
+|Audit current state
+|Manual checking
+|1 command
+|===
+
+**ROI**: 120x time savings (10 hours → 5 minutes)
+
+==== Integration with Existing Operations
+
+Complete workflow example:
+[source,bash]
+----
+# 1. Update workflows with SHA pinning
+repo-batcher workflow-update --targets "@all-repos"
+
+# 2. Enable branch protection for workflows
+repo-batcher github-settings \
+  --targets "@all-repos" \
+  --set branch-protection=true \
+  --require-status-checks="workflow-linter,security-scan"
+
+# 3. Audit SPDX compliance
+repo-batcher spdx-audit --targets "@all-repos"
+
+# 4. Update licenses where needed
+repo-batcher license-update \
+  --old "MIT" \
+  --new "PMPL-1.0-or-later" \
+  --targets "@non-compliant"
+
+# 5. Sync all changes
+repo-batcher git-sync \
+  --parallel 8 \
+  --commit-message "chore: security hardening"
+----
+
+==== Files to Create
+
+[cols="2,1,2",options="header"]
+|===
+|File |Lines |Purpose
+
+|`src/ats2/operations/github_settings.dats`
+|400
+|Core operation with proofs
+
+|`src/v/github/settings.v`
+|300
+|GitHub API integration
+
+|`src/v/github/branch_protection.v`
+|200
+|Branch protection logic
+
+|`src/v/parsers/settings_toml.v`
+|150
+|TOML config parser
+
+|`tests/github_settings_test.v`
+|200
+|Integration tests
+
+|**Total**
+|**1,250**
+|**Complete implementation**
+|===
+
 ---
 
 == Phase 3: Advanced Operations (v2.0)
@@ -644,11 +876,12 @@ praxi prove_idempotent_workflow_update:
 7. ⬜ Operation telemetry
 8. ⬜ Smart repo prioritization
 9. ⬜ Adaptive parallelism
+10. ⬜ **GitHub settings operation** (bulk repo configuration - HIGH PRIORITY)
 
 === Long-term (2+ Months)
-10. ⬜ Additional operations (dependency-update, etc.)
-11. ⬜ Custom operation templates
-12. ⬜ Ecosystem integration (Hypatia, gitbot-fleet)
+11. ⬜ Additional operations (dependency-update, readme-standardize)
+12. ⬜ Custom operation templates
+13. ⬜ Ecosystem integration (Hypatia, gitbot-fleet)
 
 ---
 
