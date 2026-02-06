@@ -15,6 +15,7 @@ import rollback
 import watcher
 import github
 import parsers
+import safety
 
 const (
 	version = '0.1.0'
@@ -233,6 +234,12 @@ fn main() {
 						abbrev: 'd'
 						description: 'Preview changes without executing'
 					},
+					cli.Flag{
+						flag: .bool
+						name: 'force'
+						abbrev: 'f'
+						description: 'Skip safety confirmation prompts'
+					},
 				]
 			},
 			cli.Command{
@@ -258,6 +265,12 @@ fn main() {
 						name: 'dry-run'
 						abbrev: 'd'
 						description: 'Preview changes without executing'
+					},
+					cli.Flag{
+						flag: .bool
+						name: 'force'
+						abbrev: 'f'
+						description: 'Skip safety confirmation prompts'
 					},
 				]
 			},
@@ -770,12 +783,26 @@ fn cmd_wiki_setup(cmd cli.Command) ! {
 	targets := cmd.flags.get_string('targets')!
 	home_template := cmd.flags.get_string('home-template') or { '' }
 	dry_run := cmd.flags.get_bool('dry-run') or { false }
+	force := cmd.flags.get_bool('force') or { false }
 
 	println('Wiki Setup Operation')
 	println('  Targets: ${targets}')
 	println('  Home template: ${if home_template != '' { home_template } else { '(default)' }}')
 	println('  Dry Run: ${dry_run}')
 	println('')
+
+	// Initialize safety system
+	mut safety_ctx := safety.new_safety_context() or {
+		println('⚠️  Failed to initialize safety system: ${err}')
+		println('⚠️  Proceeding with default strict safety')
+		safety.SafetyContext{
+			config: safety.default_safety_config()
+			rate_limiter: safety.new_rate_limiter(100)
+			audit_log: safety.AuditLog{ log_file: '' }
+			enabled: true
+		}
+	}
+	safety_ctx.print_banner()
 
 	// Check gh CLI authentication
 	if !github.check_gh_cli_installed()! {
@@ -815,6 +842,18 @@ fn cmd_wiki_setup(cmd cli.Command) ! {
 		return
 	}
 
+	// Pre-flight validation
+	validation_result := safety_ctx.validate(repos, 'wiki-setup', dry_run) or {
+		println('⚠️  Validation failed: ${err}')
+		return error('Validation error')
+	}
+
+	safety.print_validation_result(validation_result)
+
+	if !validation_result.passed {
+		return error('Pre-flight validation failed')
+	}
+
 	// Convert to owner/repo format
 	mut repo_names := []string{}
 	for repo_path in repos {
@@ -830,12 +869,51 @@ fn cmd_wiki_setup(cmd cli.Command) ! {
 		}
 	}
 
+	// Safety check - should we proceed?
+	if !safety_ctx.should_proceed(
+		safety.OperationType.remote_changes,
+		repo_names,
+		'Initialize wikis with first page',
+		dry_run,
+		force
+	)! {
+		println('Operation cancelled by user or safety system')
+		safety_ctx.audit(safety.OperationType.remote_changes, repo_names, 'wiki-setup', 'CANCELLED')
+		return
+	}
+
 	println('Initializing wikis for ${repo_names.len} repositories...')
 	println('')
 
-	// Execute wiki setup
+	// Execute wiki setup with rate limiting
 	start_time := time.now()
-	results := github.setup_wikis_batch(repo_names, home_content, dry_run)
+	mut results := []github.WikiSetupResult{}
+
+	for i, repo_name in repo_names {
+		if i > 0 {
+			safety_ctx.rate_limit()
+		}
+
+		result := github.setup_wiki(github.WikiSetupParams{
+			repo: repo_name
+			home_content: home_content
+			dry_run: dry_run
+		}) or {
+			results << github.WikiSetupResult{
+				repo: repo_name
+				success: false
+				message: 'Error: ${err}'
+			}
+			continue
+		}
+
+		results << result
+
+		if i % 10 == 0 && i > 0 {
+			println('  Progress: ${i}/${repo_names.len}')
+		}
+	}
+
 	duration := time.since(start_time)
 
 	// Print summary
@@ -850,6 +928,10 @@ fn cmd_wiki_setup(cmd cli.Command) ! {
 		}
 	}
 
+	// Audit log
+	status := if failed > 0 { 'PARTIAL_FAILURE' } else { 'SUCCESS' }
+	safety_ctx.audit(safety.OperationType.remote_changes, repo_names, 'wiki-setup', status)
+
 	if failed > 0 {
 		return error('Wiki setup completed with failures')
 	}
@@ -859,12 +941,26 @@ fn cmd_community_setup(cmd cli.Command) ! {
 	targets := cmd.flags.get_string('targets')!
 	template_dir := cmd.flags.get_string('template-dir') or { '' }
 	dry_run := cmd.flags.get_bool('dry-run') or { false }
+	force := cmd.flags.get_bool('force') or { false }
 
 	println('Community Health Files Setup')
 	println('  Targets: ${targets}')
 	println('  Templates: ${if template_dir != '' { template_dir } else { '(default)' }}')
 	println('  Dry Run: ${dry_run}')
 	println('')
+
+	// Initialize safety system
+	mut safety_ctx := safety.new_safety_context() or {
+		println('⚠️  Failed to initialize safety system: ${err}')
+		println('⚠️  Proceeding with default strict safety')
+		safety.SafetyContext{
+			config: safety.default_safety_config()
+			rate_limiter: safety.new_rate_limiter(100)
+			audit_log: safety.AuditLog{ log_file: '' }
+			enabled: true
+		}
+	}
+	safety_ctx.print_banner()
 
 	// Get community files (default or from template directory)
 	mut files := []github.CommunityFile{}
@@ -931,12 +1027,64 @@ fn cmd_community_setup(cmd cli.Command) ! {
 		return
 	}
 
+	// Pre-flight validation
+	validation_result := safety_ctx.validate(repos, 'community-setup', dry_run) or {
+		println('⚠️  Validation failed: ${err}')
+		return error('Validation error')
+	}
+
+	safety.print_validation_result(validation_result)
+
+	if !validation_result.passed {
+		return error('Pre-flight validation failed')
+	}
+
+	// Safety check - should we proceed?
+	if !safety_ctx.should_proceed(
+		safety.OperationType.local_changes,
+		repos,
+		'Deploy community health files',
+		dry_run,
+		force
+	)! {
+		println('Operation cancelled by user or safety system')
+		safety_ctx.audit(safety.OperationType.local_changes, repos, 'community-setup', 'CANCELLED')
+		return
+	}
+
 	println('Deploying community files to ${repos.len} repositories...')
 	println('')
 
-	// Execute community setup
+	// Execute community setup with rate limiting
 	start_time := time.now()
-	results := github.setup_community_batch(repos, files, dry_run)
+	mut results := []github.CommunitySetupResult{}
+
+	for i, repo_path in repos {
+		if i > 0 {
+			safety_ctx.rate_limit()
+		}
+
+		result := github.setup_community_files(github.CommunitySetupParams{
+			repo_path: repo_path
+			files: files
+			dry_run: dry_run
+		}) or {
+			results << github.CommunitySetupResult{
+				repo_path: repo_path
+				success: false
+				files_created: 0
+				message: 'Error: ${err}'
+			}
+			continue
+		}
+
+		results << result
+
+		if i % 10 == 0 && i > 0 {
+			println('  Progress: ${i}/${repos.len}')
+		}
+	}
+
 	duration := time.since(start_time)
 
 	// Print summary
@@ -950,6 +1098,10 @@ fn cmd_community_setup(cmd cli.Command) ! {
 			failed++
 		}
 	}
+
+	// Audit log
+	status := if failed > 0 { 'PARTIAL_FAILURE' } else { 'SUCCESS' }
+	safety_ctx.audit(safety.OperationType.local_changes, repos, 'community-setup', status)
 
 	if failed > 0 {
 		return error('Community setup completed with failures')
