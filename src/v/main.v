@@ -7,10 +7,12 @@ module main
 
 import os
 import cli
+import ffi
 
 const (
 	version = '0.1.0'
 	app_name = 'repo-batcher'
+	default_repos_dir = os.join_path(os.home_dir(), 'Documents', 'hyperpolymath-repos')
 )
 
 fn main() {
@@ -227,7 +229,7 @@ fn cmd_license_update(cmd cli.Command) ! {
 	new := cmd.flags.get_string('new')!
 	targets := cmd.flags.get_string('targets')!
 	dry_run := cmd.flags.get_bool('dry-run') or { false }
-	backup := cmd.flags.get_bool('backup') or { false }
+	backup := cmd.flags.get_bool('backup') or { true }
 
 	println('License Update Operation')
 	println('  Old: ${old}')
@@ -237,12 +239,46 @@ fn cmd_license_update(cmd cli.Command) ! {
 	println('  Backup: ${backup}')
 	println('')
 
-	if dry_run {
-		println('[DRY RUN] No changes will be made')
+	// Validate SPDX identifiers first
+	if !ffi.validate_spdx(old) {
+		println('ERROR: Invalid old license SPDX identifier: ${old}')
+		return error('Invalid SPDX identifier')
 	}
 
-	// TODO: Call ATS2 FFI to validate and execute
-	println('TODO: Implement ATS2 FFI call')
+	if !ffi.validate_spdx(new) {
+		println('ERROR: Invalid new license SPDX identifier: ${new}')
+		return error('Invalid SPDX identifier')
+	}
+
+	if dry_run {
+		println('[DRY RUN] No changes will be made')
+		println('')
+	}
+
+	// Resolve target directory
+	base_dir := if targets.starts_with('@') {
+		default_repos_dir
+	} else {
+		targets
+	}
+
+	// Call ATS2 formally verified implementation
+	println('Executing formally verified license update...')
+	params := ffi.LicenseUpdateParams{
+		old_license: old
+		new_license: new
+		base_dir: base_dir
+		max_depth: 2
+		dry_run: dry_run
+		backup: backup
+	}
+
+	result := ffi.license_update(params)
+	result.print()
+
+	if result.has_failures() {
+		return error('License update completed with failures')
+	}
 }
 
 fn cmd_file_replace(cmd cli.Command) ! {
@@ -250,7 +286,7 @@ fn cmd_file_replace(cmd cli.Command) ! {
 	replacement := cmd.flags.get_string('replacement')!
 	targets := cmd.flags.get_string('targets')!
 	dry_run := cmd.flags.get_bool('dry-run') or { false }
-	backup := cmd.flags.get_bool('backup') or { false }
+	backup := cmd.flags.get_bool('backup') or { true }
 
 	println('File Replace Operation')
 	println('  Pattern: ${pattern}')
@@ -260,12 +296,41 @@ fn cmd_file_replace(cmd cli.Command) ! {
 	println('  Backup: ${backup}')
 	println('')
 
-	if dry_run {
-		println('[DRY RUN] No changes will be made')
+	// Check replacement file exists
+	if !os.exists(replacement) {
+		println('ERROR: Replacement file does not exist: ${replacement}')
+		return error('Replacement file not found')
 	}
 
-	// TODO: Call ATS2 FFI to validate and execute
-	println('TODO: Implement ATS2 FFI call')
+	if dry_run {
+		println('[DRY RUN] No changes will be made')
+		println('')
+	}
+
+	// Resolve target directory
+	base_dir := if targets.starts_with('@') {
+		default_repos_dir
+	} else {
+		targets
+	}
+
+	// Call ATS2 formally verified implementation
+	println('Executing formally verified file replace...')
+	params := ffi.FileReplaceParams{
+		pattern: pattern
+		replacement: replacement
+		base_dir: base_dir
+		max_depth: 2
+		dry_run: dry_run
+		backup: backup
+	}
+
+	result := ffi.file_replace(params)
+	result.print()
+
+	if result.has_failures() {
+		return error('File replace completed with failures')
+	}
 }
 
 fn cmd_git_sync(cmd cli.Command) ! {
@@ -274,7 +339,7 @@ fn cmd_git_sync(cmd cli.Command) ! {
 	message := cmd.flags.get_string('commit-message') or { 'chore: batch update' }
 	dry_run := cmd.flags.get_bool('dry-run') or { false }
 
-	println('Git Batch Sync Operation')
+	println('Git Batch Sync Operation (ported from sync_repos.sh)')
 	println('  Parallel Jobs: ${parallel}')
 	println('  Max Depth: ${depth}')
 	println('  Commit Message: ${message}')
@@ -283,11 +348,29 @@ fn cmd_git_sync(cmd cli.Command) ! {
 
 	if dry_run {
 		println('[DRY RUN] No changes will be made')
+		println('')
 	}
 
-	// TODO: Call ATS2 FFI to validate and execute
-	println('TODO: Implement git-sync with parallel execution')
-	println('TODO: Port logic from sync_repos.sh')
+	// Call ATS2 formally verified implementation
+	println('Executing formally verified git-sync...')
+	println('Scanning for repositories (find . -maxdepth ${depth} -name ".git")...')
+	println('')
+
+	params := ffi.GitSyncParams{
+		base_dir: default_repos_dir
+		max_depth: depth
+		commit_msg: message
+		parallel_jobs: parallel
+		dry_run: dry_run
+	}
+
+	result := ffi.git_sync(params)
+	result.print()
+
+	if result.has_failures() {
+		println('NOTE: Some repositories failed. Check logs for details.')
+		return error('Git sync completed with failures')
+	}
 }
 
 fn cmd_watch(cmd cli.Command) ! {

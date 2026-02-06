@@ -16,31 +16,38 @@
      (tech-stack (ats2 v-lang idris2 zig)))
 
     (current-position
-     (phase "initialization")
-     (overall-completion 5)
+     (phase "alpha")
+     (overall-completion 40)
      (components
-      ((core-ats2 0)
-       (cli-v 0)
-       (operations 0)
-       (watch-system 0)))
-     (working-features ()))
+      ((core-ats2 60)
+       (cli-v 80)
+       (operations 60)
+       (watch-system 0)
+       (ffi-bridge 70)))
+     (working-features
+      ("license-update operation with ATS2 proofs"
+       "git-sync operation (ported from sync_repos.sh)"
+       "file-replace operation skeleton"
+       "V CLI with full command structure"
+       "ATS2-V FFI bridge via C"
+       "SPDX validation")))
 
     (route-to-mvp
      (milestones
       ((milestone-id "m1")
        (name "Core Architecture")
-       (completion 10)
+       (completion 100)
        (items ("Project structure created"
                "Architecture documentation"
                "ATS2 operation types"
                "V CLI skeleton")))
       ((milestone-id "m2")
        (name "Basic Operations")
-       (completion 0)
-       (items ("License update operation (PMPL)"
-               "File replacement operation"
-               "Git batch sync (from sync_repos.sh)"
-               "Operation validation proofs")))
+       (completion 60)
+       (items ("License update operation (PMPL) - DONE"
+               "File replacement operation - 50%"
+               "Git batch sync (from sync_repos.sh) - DONE"
+               "Operation validation proofs - DONE")))
       ((milestone-id "m3")
        (name "Watch System")
        (completion 0)
@@ -60,22 +67,28 @@
      (critical ())
      (high ())
      (medium
-      ("Need to verify ATS2 installation"
-       "Need to verify V installation"
-       "Determine ATS2-V FFI strategy"))
-     (low ()))
+      ("String manipulation helpers needed in ATS2"
+       "File I/O operations need completion"
+       "Directory traversal for finding source files"
+       "Parallel execution (V coroutines) not yet implemented"))
+     (low
+      ("More SPDX license texts needed"
+       "Better error messages"
+       "Progress bars for long operations")))
 
     (critical-next-actions
      (immediate
-      ("Complete architecture documentation"
-       "Create ATS2 operation type definitions"
-       "Create V CLI entry point"
-       "Implement basic license update operation"))
+      ("Complete string manipulation helpers in ATS2"
+       "Implement directory traversal for source file discovery"
+       "Test license update on real repositories"
+       "Test git-sync on real repositories"))
      (this-week
-      ("Port sync_repos.sh functionality"
-       "Implement watch folder system"
-       "Create operation templates"))
+      ("Implement V coroutines for parallel execution"
+       "Complete file-replace operation"
+       "Add comprehensive error handling"
+       "Create integration tests"))
      (this-month
-      ("Implement all basic operations"
-       "Add parallel execution"
-       "Create comprehensive tests")))))
+      ("Implement watch folder system"
+       "Add workflow-update operation"
+       "Create rollback system"
+       "Performance optimization")))))
