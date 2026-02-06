@@ -23,11 +23,20 @@ build-dev:
 # Run tests
 test:
     @echo "Running tests..."
-    # ATS2 tests
-    cd src/ats2 && patscc -DATS_TEST -o ../../build/test_operations operations/*.dats
-    ./build/test_operations
-    # V tests
-    v test src/v/
+    # V integration tests
+    v run tests/integration_test.v
+    @echo ""
+    @echo "All tests passed!"
+
+# Run real repository tests (dry-run only)
+test-real:
+    @echo "Running real repository tests (dry-run)..."
+    ./tests/real_repo_test.sh
+
+# Run performance benchmark
+benchmark:
+    @echo "Running performance benchmark..."
+    ./benchmark/performance_test.sh
 
 # Clean build artifacts
 clean:

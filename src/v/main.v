@@ -6,10 +6,13 @@
 module main
 
 import os
+import time
 import cli
 import ffi
 import executor
 import utils
+import rollback
+import watcher
 
 const (
 	version = '0.1.0'
@@ -394,24 +397,55 @@ fn cmd_watch(cmd cli.Command) ! {
 	println('  Check Interval: ${interval}s')
 	println('')
 
-	// TODO: Implement watch daemon
-	println('TODO: Implement watch folder monitoring')
+	// Create and start monitor
+	mut monitor := watcher.new_watch_monitor(folder, interval, true)
+	monitor.start()
 }
 
 fn cmd_rollback(cmd cli.Command) ! {
 	last := cmd.flags.get_bool('last') or { false }
 	log_id := cmd.flags.get_string('log-id') or { '' }
 
+	mut mgr := rollback.new_backup_manager()
+
 	if last {
 		println('Rolling back last operation...')
-		// TODO: Implement rollback
-		println('TODO: Implement rollback from latest log')
+		println('')
+		mgr.restore_last() or {
+			println('')
+			println('ERROR: ${err}')
+			return error('Rollback failed')
+		}
+		println('')
+		println('✓ Rollback completed successfully')
 	} else if log_id != '' {
 		println('Rolling back operation: ${log_id}')
-		// TODO: Implement rollback
-		println('TODO: Implement rollback from specific log ID')
+		println('')
+		mgr.restore_operation(log_id) or {
+			println('')
+			println('ERROR: ${err}')
+			return error('Rollback failed')
+		}
+		println('')
+		println('✓ Rollback completed successfully')
 	} else {
-		println('Error: Specify --last or --log-id')
-		return error('Missing rollback target')
+		// List recent operations
+		println('Recent operations:')
+		println('')
+		operations := mgr.list_operations(10)
+		if operations.len == 0 {
+			println('No operations to rollback')
+		} else {
+			for op in operations {
+				timestamp := time.unix(op.timestamp).format()
+				println('  ${op.operation_id}')
+				println('    Type: ${op.operation_type}')
+				println('    Time: ${timestamp}')
+				println('    Repos: ${op.repos.len}')
+				println('    Files: ${op.entries.len}')
+				println('')
+			}
+			println('Use --last to rollback most recent, or --log-id <id> for specific operation')
+		}
 	}
 }
