@@ -73,6 +73,12 @@ fn main() {
 						abbrev: 'b'
 						description: 'Create backups before changes'
 					},
+					cli.Flag{
+						flag: .bool
+						name: 'force'
+						abbrev: 'f'
+						description: 'Skip safety confirmation prompts'
+					},
 				]
 			},
 			cli.Command{
@@ -298,6 +304,12 @@ fn main() {
 						abbrev: 'd'
 						description: 'Preview changes without executing'
 					},
+					cli.Flag{
+						flag: .bool
+						name: 'force'
+						abbrev: 'f'
+						description: 'Skip safety confirmation prompts'
+					},
 				]
 			},
 			cli.Command{
@@ -317,6 +329,12 @@ fn main() {
 						name: 'dry-run'
 						abbrev: 'd'
 						description: 'Preview changes without executing'
+					},
+					cli.Flag{
+						flag: .bool
+						name: 'force'
+						abbrev: 'f'
+						description: 'Skip safety confirmation prompts'
 					},
 				]
 			},
@@ -350,6 +368,12 @@ fn main() {
 						name: 'dry-run'
 						abbrev: 'd'
 						description: 'Preview changes without executing'
+					},
+					cli.Flag{
+						flag: .bool
+						name: 'force'
+						abbrev: 'f'
+						description: 'Skip safety confirmation prompts'
 					},
 				]
 			},
@@ -437,6 +461,7 @@ fn cmd_license_update(cmd cli.Command) ! {
 	targets := cmd.flags.get_string('targets')!
 	dry_run := cmd.flags.get_bool('dry-run') or { false }
 	backup := cmd.flags.get_bool('backup') or { true }
+	force := cmd.flags.get_bool('force') or { false }
 
 	println('License Update Operation')
 	println('  Old: ${old}')
@@ -445,6 +470,19 @@ fn cmd_license_update(cmd cli.Command) ! {
 	println('  Dry Run: ${dry_run}')
 	println('  Backup: ${backup}')
 	println('')
+
+	// Initialize safety system
+	mut safety_ctx := safety.new_safety_context() or {
+		println('⚠️  Failed to initialize safety system: ${err}')
+		println('⚠️  Proceeding with default strict safety')
+		safety.SafetyContext{
+			config: safety.default_safety_config()
+			rate_limiter: safety.new_rate_limiter(100)
+			audit_log: safety.AuditLog{ log_file: '' }
+			enabled: true
+		}
+	}
+	safety_ctx.print_banner()
 
 	// Validate SPDX identifiers first
 	if !ffi.validate_spdx(old) {
@@ -473,6 +511,31 @@ fn cmd_license_update(cmd cli.Command) ! {
 		return
 	}
 
+	// Pre-flight validation
+	validation_result := safety_ctx.validate(repos, 'license-update', dry_run) or {
+		println('⚠️  Validation failed: ${err}')
+		return error('Validation error')
+	}
+
+	safety.print_validation_result(validation_result)
+
+	if !validation_result.passed {
+		return error('Pre-flight validation failed')
+	}
+
+	// Safety check - should we proceed?
+	if !safety_ctx.should_proceed(
+		safety.OperationType.local_changes,
+		repos,
+		'Update license from ${old} to ${new}',
+		dry_run,
+		force
+	)! {
+		println('Operation cancelled by user or safety system')
+		safety_ctx.audit(safety.OperationType.local_changes, repos, 'license-update', 'CANCELLED')
+		return
+	}
+
 	// Determine parallel jobs (use 4 for license updates, less I/O intensive)
 	parallel := if repos.len < 4 { repos.len } else { 4 }
 
@@ -484,6 +547,10 @@ fn cmd_license_update(cmd cli.Command) ! {
 
 	// Print results
 	result.print()
+
+	// Audit log
+	status := if result.has_failures() { 'PARTIAL_FAILURE' } else { 'SUCCESS' }
+	safety_ctx.audit(safety.OperationType.local_changes, repos, 'license-update', status)
 
 	if result.has_failures() {
 		return error('License update completed with failures')
@@ -1112,12 +1179,26 @@ fn cmd_templates_setup(cmd cli.Command) ! {
 	targets := cmd.flags.get_string('targets')!
 	template_dir := cmd.flags.get_string('template-dir') or { '' }
 	dry_run := cmd.flags.get_bool('dry-run') or { false }
+	force := cmd.flags.get_bool('force') or { false }
 
 	println('Issue & PR Templates Setup')
 	println('  Targets: ${targets}')
 	println('  Templates: ${if template_dir != '' { template_dir } else { '(default)' }}')
 	println('  Dry Run: ${dry_run}')
 	println('')
+
+	// Initialize safety system
+	mut safety_ctx := safety.new_safety_context() or {
+		println('⚠️  Failed to initialize safety system: ${err}')
+		println('⚠️  Proceeding with default strict safety')
+		safety.SafetyContext{
+			config: safety.default_safety_config()
+			rate_limiter: safety.new_rate_limiter(100)
+			audit_log: safety.AuditLog{ log_file: '' }
+			enabled: true
+		}
+	}
+	safety_ctx.print_banner()
 
 	// Get templates (default or custom)
 	mut issue_templates := []github.IssueTemplate{}
@@ -1180,12 +1261,65 @@ fn cmd_templates_setup(cmd cli.Command) ! {
 		return
 	}
 
+	// Pre-flight validation
+	validation_result := safety_ctx.validate(repos, 'templates-setup', dry_run) or {
+		println('⚠️  Validation failed: ${err}')
+		return error('Validation error')
+	}
+
+	safety.print_validation_result(validation_result)
+
+	if !validation_result.passed {
+		return error('Pre-flight validation failed')
+	}
+
+	// Safety check - should we proceed?
+	if !safety_ctx.should_proceed(
+		safety.OperationType.local_changes,
+		repos,
+		'Deploy issue and PR templates',
+		dry_run,
+		force
+	)! {
+		println('Operation cancelled by user or safety system')
+		safety_ctx.audit(safety.OperationType.local_changes, repos, 'templates-setup', 'CANCELLED')
+		return
+	}
+
 	println('Deploying templates to ${repos.len} repositories...')
 	println('')
 
-	// Execute templates setup
+	// Execute templates setup with rate limiting
 	start_time := time.now()
-	results := github.setup_templates_batch(repos, issue_templates, pr_template, dry_run)
+	mut results := []github.TemplatesSetupResult{}
+
+	for i, repo_path in repos {
+		if i > 0 {
+			safety_ctx.rate_limit()
+		}
+
+		result := github.setup_templates(github.TemplatesSetupParams{
+			repo_path: repo_path
+			issue_templates: issue_templates
+			pr_template: pr_template
+			dry_run: dry_run
+		}) or {
+			results << github.TemplatesSetupResult{
+				repo_path: repo_path
+				success: false
+				templates_created: 0
+				message: 'Error: ${err}'
+			}
+			continue
+		}
+
+		results << result
+
+		if i % 10 == 0 && i > 0 {
+			println('  Progress: ${i}/${repos.len}')
+		}
+	}
+
 	duration := time.since(start_time)
 
 	// Print summary
@@ -1200,6 +1334,10 @@ fn cmd_templates_setup(cmd cli.Command) ! {
 		}
 	}
 
+	// Audit log
+	status := if failed > 0 { 'PARTIAL_FAILURE' } else { 'SUCCESS' }
+	safety_ctx.audit(safety.OperationType.local_changes, repos, 'templates-setup', status)
+
 	if failed > 0 {
 		return error('Templates setup completed with failures')
 	}
@@ -1208,11 +1346,25 @@ fn cmd_templates_setup(cmd cli.Command) ! {
 fn cmd_discussions_setup(cmd cli.Command) ! {
 	targets := cmd.flags.get_string('targets')!
 	dry_run := cmd.flags.get_bool('dry-run') or { false }
+	force := cmd.flags.get_bool('force') or { false }
 
 	println('GitHub Discussions Setup')
 	println('  Targets: ${targets}')
 	println('  Dry Run: ${dry_run}')
 	println('')
+
+	// Initialize safety system
+	mut safety_ctx := safety.new_safety_context() or {
+		println('⚠️  Failed to initialize safety system: ${err}')
+		println('⚠️  Proceeding with default strict safety')
+		safety.SafetyContext{
+			config: safety.default_safety_config()
+			rate_limiter: safety.new_rate_limiter(100)
+			audit_log: safety.AuditLog{ log_file: '' }
+			enabled: true
+		}
+	}
+	safety_ctx.print_banner()
 
 	// Check gh CLI authentication
 	if !github.check_gh_cli_installed()! {
@@ -1243,6 +1395,18 @@ fn cmd_discussions_setup(cmd cli.Command) ! {
 		return
 	}
 
+	// Pre-flight validation
+	validation_result := safety_ctx.validate(repos, 'discussions-setup', dry_run) or {
+		println('⚠️  Validation failed: ${err}')
+		return error('Validation error')
+	}
+
+	safety.print_validation_result(validation_result)
+
+	if !validation_result.passed {
+		return error('Pre-flight validation failed')
+	}
+
 	// Convert to owner/repo format
 	mut repo_names := []string{}
 	for repo_path in repos {
@@ -1253,13 +1417,49 @@ fn cmd_discussions_setup(cmd cli.Command) ! {
 		}
 	}
 
+	// Safety check - should we proceed?
+	if !safety_ctx.should_proceed(
+		safety.OperationType.read_only,
+		repo_names,
+		'Check GitHub Discussions status',
+		dry_run,
+		force
+	)! {
+		println('Operation cancelled by user or safety system')
+		safety_ctx.audit(safety.OperationType.read_only, repo_names, 'discussions-setup', 'CANCELLED')
+		return
+	}
+
 	println('Setting up discussions for ${repo_names.len} repositories...')
 	println('')
 
-	// Execute discussions setup
+	// Execute discussions setup with rate limiting
 	categories := github.default_discussion_categories()
 	start_time := time.now()
-	results := github.setup_discussions_batch(repo_names, categories, dry_run)
+	mut results := []github.DiscussionsSetupResult{}
+
+	for i, repo_name in repo_names {
+		if i > 0 {
+			safety_ctx.rate_limit()
+		}
+
+		result := github.check_discussions_status(repo_name, categories, dry_run) or {
+			results << github.DiscussionsSetupResult{
+				repo: repo_name
+				success: false
+				enabled: false
+				message: 'Error: ${err}'
+			}
+			continue
+		}
+
+		results << result
+
+		if i % 10 == 0 && i > 0 {
+			println('  Progress: ${i}/${repo_names.len}')
+		}
+	}
+
 	duration := time.since(start_time)
 
 	// Print summary
@@ -1269,6 +1469,9 @@ fn cmd_discussions_setup(cmd cli.Command) ! {
 	println('')
 	println('Note: Discussions must be manually enabled in GitHub repository settings')
 	println('due to API limitations. This command verifies their status.')
+
+	// Audit log
+	safety_ctx.audit(safety.OperationType.read_only, repo_names, 'discussions-setup', 'SUCCESS')
 }
 
 fn cmd_pages_setup(cmd cli.Command) ! {
@@ -1276,6 +1479,7 @@ fn cmd_pages_setup(cmd cli.Command) ! {
 	source_str := cmd.flags.get_string('source') or { 'docs-main' }
 	cname := cmd.flags.get_string('cname') or { '' }
 	dry_run := cmd.flags.get_bool('dry-run') or { false }
+	force := cmd.flags.get_bool('force') or { false }
 
 	// Parse source parameter
 	source := match source_str {
@@ -1294,6 +1498,19 @@ fn cmd_pages_setup(cmd cli.Command) ! {
 	println('  Dry Run: ${dry_run}')
 	println('')
 
+	// Initialize safety system
+	mut safety_ctx := safety.new_safety_context() or {
+		println('⚠️  Failed to initialize safety system: ${err}')
+		println('⚠️  Proceeding with default strict safety')
+		safety.SafetyContext{
+			config: safety.default_safety_config()
+			rate_limiter: safety.new_rate_limiter(100)
+			audit_log: safety.AuditLog{ log_file: '' }
+			enabled: true
+		}
+	}
+	safety_ctx.print_banner()
+
 	// Check gh CLI authentication
 	if !github.check_gh_cli_installed()! {
 		println('ERROR: GitHub CLI (gh) is not installed')
@@ -1323,6 +1540,18 @@ fn cmd_pages_setup(cmd cli.Command) ! {
 		return
 	}
 
+	// Pre-flight validation
+	validation_result := safety_ctx.validate(repos, 'pages-setup', dry_run) or {
+		println('⚠️  Validation failed: ${err}')
+		return error('Validation error')
+	}
+
+	safety.print_validation_result(validation_result)
+
+	if !validation_result.passed {
+		return error('Pre-flight validation failed')
+	}
+
 	// Convert to owner/repo format
 	mut repo_names := []string{}
 	for repo_path in repos {
@@ -1333,15 +1562,72 @@ fn cmd_pages_setup(cmd cli.Command) ! {
 		}
 	}
 
+	// Safety check - should we proceed?
+	if !safety_ctx.should_proceed(
+		safety.OperationType.remote_changes,
+		repo_names,
+		'Enable GitHub Pages',
+		dry_run,
+		force
+	)! {
+		println('Operation cancelled by user or safety system')
+		safety_ctx.audit(safety.OperationType.remote_changes, repo_names, 'pages-setup', 'CANCELLED')
+		return
+	}
+
 	println('Setting up Pages for ${repo_names.len} repositories...')
 	println('')
 
-	// Execute Pages setup
+	// Execute Pages setup with rate limiting
 	start_time := time.now()
-	results := github.setup_pages_batch(repo_names, source, cname, dry_run)
+	mut results := []github.PagesSetupResult{}
+
+	for i, repo_name in repo_names {
+		if i > 0 {
+			safety_ctx.rate_limit()
+		}
+
+		result := github.setup_pages(github.PagesSetupParams{
+			repo: repo_name
+			source: source
+			cname: cname
+			dry_run: dry_run
+		}) or {
+			results << github.PagesSetupResult{
+				repo: repo_name
+				success: false
+				url: ''
+				message: 'Error: ${err}'
+			}
+			continue
+		}
+
+		results << result
+
+		if i % 10 == 0 && i > 0 {
+			println('  Progress: ${i}/${repo_names.len}')
+		}
+	}
+
 	duration := time.since(start_time)
 
 	// Print summary
 	github.print_pages_summary(results)
 	println('Completed in ${duration.seconds():.2f}s')
+
+	// Check for failures
+	mut failed := 0
+	for result in results {
+		if !result.success {
+			failed++
+		}
+	}
+
+	// Audit log
+	status := if failed > 0 { 'PARTIAL_FAILURE' } else { 'SUCCESS' }
+	safety_ctx.audit(safety.OperationType.remote_changes, repo_names, 'pages-setup', status)
+
+	if failed > 0 {
+		return error('Pages setup completed with failures')
+	}
 }
