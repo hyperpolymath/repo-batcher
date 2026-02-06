@@ -37,6 +37,21 @@ pub mut:
 	results     voidptr
 }
 
+pub struct CGitHubSettings {
+pub mut:
+	// Repository features (-1=none, 0=false, 1=true)
+	has_issues    int
+	has_wiki      int
+	has_projects  int
+	has_downloads int
+	// Merge settings
+	allow_squash_merge     int
+	allow_merge_commit     int
+	allow_rebase_merge     int
+	delete_branch_on_merge int
+	allow_auto_merge       int
+}
+
 // Convert C string to V string
 fn c_string_to_v(s &char) string {
 	if s == 0 {
@@ -58,6 +73,8 @@ fn C.c_file_replace(&char, &char, &char, int, int, int) CBatchResult
 fn C.c_workflow_update(&char, int, int, int) CBatchResult
 
 fn C.c_spdx_audit(&char, int) CAuditResults
+
+fn C.c_github_settings(&char, int, CGitHubSettings, int) int
 
 fn C.c_get_version() &char
 
@@ -320,4 +337,59 @@ pub fn print_audit_results(results []AuditResult) {
 		println('Overall compliance: ${compliance}%')
 	}
 	println('')
+}
+
+// GitHubSettingsParams contains parameters for GitHub settings operation
+pub struct GitHubSettingsParams {
+pub:
+	base_dir  string
+	max_depth int
+	// Repository features (none = don't change)
+	has_issues    ?bool
+	has_wiki      ?bool
+	has_projects  ?bool
+	has_downloads ?bool
+	// Merge settings
+	allow_squash_merge     ?bool
+	allow_merge_commit     ?bool
+	allow_rebase_merge     ?bool
+	delete_branch_on_merge ?bool
+	allow_auto_merge       ?bool
+	// Options
+	dry_run bool
+}
+
+// Convert ?bool to C int representation (-1=none, 0=false, 1=true)
+fn option_bool_to_int(opt ?bool) int {
+	if val := opt {
+		return if val { 1 } else { 0 }
+	}
+	return -1
+}
+
+// Performs GitHub settings update across repositories
+// Applies repository configuration changes via GitHub API
+pub fn github_settings(params GitHubSettingsParams) int {
+	dry_run_flag := if params.dry_run { 1 } else { 0 }
+
+	c_settings := CGitHubSettings{
+		has_issues: option_bool_to_int(params.has_issues)
+		has_wiki: option_bool_to_int(params.has_wiki)
+		has_projects: option_bool_to_int(params.has_projects)
+		has_downloads: option_bool_to_int(params.has_downloads)
+		allow_squash_merge: option_bool_to_int(params.allow_squash_merge)
+		allow_merge_commit: option_bool_to_int(params.allow_merge_commit)
+		allow_rebase_merge: option_bool_to_int(params.allow_rebase_merge)
+		delete_branch_on_merge: option_bool_to_int(params.delete_branch_on_merge)
+		allow_auto_merge: option_bool_to_int(params.allow_auto_merge)
+	}
+
+	success_count := C.c_github_settings(
+		params.base_dir.str,
+		params.max_depth,
+		c_settings,
+		dry_run_flag
+	)
+
+	return success_count
 }

@@ -13,6 +13,8 @@ import executor
 import utils
 import rollback
 import watcher
+import github
+import parsers
 
 const (
 	version = '0.1.0'
@@ -167,6 +169,47 @@ fn main() {
 				]
 			},
 			cli.Command{
+				name: 'github-settings'
+				description: 'Bulk GitHub repository settings configuration'
+				execute: cmd_github_settings
+				flags: [
+					cli.Flag{
+						flag: .string
+						name: 'config'
+						abbrev: 'c'
+						description: 'TOML config file path'
+					},
+					cli.Flag{
+						flag: .string
+						name: 'targets'
+						abbrev: 't'
+						description: 'Target repositories (comma-separated or @pattern)'
+						required: true
+					},
+					cli.Flag{
+						flag: .bool
+						name: 'dry-run'
+						abbrev: 'd'
+						description: 'Preview changes without executing'
+					},
+					cli.Flag{
+						flag: .bool
+						name: 'has-issues'
+						description: 'Enable/disable issues (use --no-has-issues to disable)'
+					},
+					cli.Flag{
+						flag: .bool
+						name: 'has-wiki'
+						description: 'Enable/disable wiki'
+					},
+					cli.Flag{
+						flag: .bool
+						name: 'delete-branch-on-merge'
+						description: 'Auto-delete branches after merge'
+					},
+				]
+			},
+			cli.Command{
 				name: 'rollback'
 				description: 'Rollback last operation or specific log'
 				execute: cmd_rollback
@@ -204,6 +247,7 @@ fn show_help(cmd cli.Command) ! {
 	println('  license-update    Update license across repositories')
 	println('  file-replace      Replace files across repositories')
 	println('  git-sync          Batch git sync (add, commit, push)')
+	println('  github-settings   Bulk repository configuration (features, merge settings)')
 	println('  watch             Start watch daemon')
 	println('  rollback          Rollback operation')
 	println('')
@@ -224,6 +268,9 @@ fn cmd_list_operations(cmd cli.Command) ! {
 	println('')
 	println('  workflow-update   Update GitHub Actions workflows')
 	println('                    Safety: Valid YAML, SHA pinning validation')
+	println('')
+	println('  github-settings   Bulk repository configuration via GitHub API')
+	println('                    Safety: Pre-flight validation, rollback support')
 	println('')
 	println('  custom            Execute custom operation from template')
 	println('                    Safety: Template validation, dry-run enforced')
@@ -447,5 +494,132 @@ fn cmd_rollback(cmd cli.Command) ! {
 			}
 			println('Use --last to rollback most recent, or --log-id <id> for specific operation')
 		}
+	}
+}
+
+fn cmd_github_settings(cmd cli.Command) ! {
+	config_file := cmd.flags.get_string('config') or { '' }
+	targets := cmd.flags.get_string('targets')!
+	dry_run := cmd.flags.get_bool('dry-run') or { false }
+
+	// Individual flag overrides
+	has_issues := cmd.flags.get_bool('has-issues') or { none }
+	has_wiki := cmd.flags.get_bool('has-wiki') or { none }
+	delete_branch := cmd.flags.get_bool('delete-branch-on-merge') or { none }
+
+	println('GitHub Settings Operation')
+	println('  Config: ${if config_file != '' { config_file } else { '(command-line flags)' }}')
+	println('  Targets: ${targets}')
+	println('  Dry Run: ${dry_run}')
+	println('')
+
+	// Check gh CLI authentication
+	if !github.check_gh_cli_installed()! {
+		println('ERROR: GitHub CLI (gh) is not installed')
+		println('Please install it: https://cli.github.com/')
+		return error('gh CLI not available')
+	}
+
+	if !github.check_gh_auth()! {
+		println('ERROR: Not authenticated with GitHub CLI')
+		println('Please run: gh auth login')
+		return error('gh auth required')
+	}
+
+	// Load settings from config file or flags
+	mut settings := github.GitHubSettings{
+		repo_features: github.RepoFeatures{
+			has_issues: has_issues
+			has_wiki: has_wiki
+		}
+		merge_settings: github.MergeSettings{
+			delete_branch_on_merge: delete_branch
+		}
+	}
+
+	// If config file provided, parse it and merge with flags
+	if config_file != '' {
+		println('Loading settings from ${config_file}...')
+		settings = parsers.parse_settings_toml(config_file) or {
+			println('ERROR: Failed to parse config file: ${err}')
+			return error('Config parse failed')
+		}
+
+		// Command-line flags override config file
+		if has_issues != none {
+			settings.repo_features.has_issues = has_issues
+		}
+		if has_wiki != none {
+			settings.repo_features.has_wiki = has_wiki
+		}
+		if delete_branch != none {
+			settings.merge_settings.delete_branch_on_merge = delete_branch
+		}
+	}
+
+	// Validate settings
+	parsers.validate_settings(settings) or {
+		println('ERROR: Invalid settings: ${err}')
+		return error('Validation failed')
+	}
+
+	if dry_run {
+		println('[DRY RUN] No changes will be made')
+		println('')
+	}
+
+	// Resolve repositories from target specification
+	println('Resolving target repositories...')
+	repos := utils.resolve_targets(targets, default_repos_dir, 2)
+	println('Found ${repos.len} repositories')
+	println('')
+
+	if repos.len == 0 {
+		println('No repositories found matching: ${targets}')
+		return
+	}
+
+	// Convert repo paths to owner/repo format (assumes repos in ~/Documents/hyperpolymath-repos/)
+	mut repo_names := []string{}
+	for repo_path in repos {
+		// Extract repo name from path
+		parts := repo_path.split(os.path_separator)
+		if parts.len > 0 {
+			repo_name := parts[parts.len - 1]
+			// Assume hyperpolymath organization
+			repo_names << 'hyperpolymath/${repo_name}'
+		}
+	}
+
+	println('Applying settings to ${repo_names.len} repositories...')
+	println('')
+
+	// Execute settings update
+	start_time := time.now()
+	results := github.apply_settings_batch(repo_names, settings, dry_run)
+	duration := time.since(start_time)
+
+	// Print results
+	println('')
+	mut success := 0
+	mut failed := 0
+	for result in results {
+		if result.success {
+			success++
+			println('✓ ${result.repo_path}: ${result.message}')
+		} else {
+			failed++
+			println('✗ ${result.repo_path}: ${result.message}')
+		}
+	}
+
+	println('')
+	summary := github.compute_summary(results)
+	github.print_summary(summary)
+
+	println('Completed in ${duration.seconds():.2f}s')
+
+	if failed > 0 {
+		return error('GitHub settings update completed with failures')
 	}
 }
